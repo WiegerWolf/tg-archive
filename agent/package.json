@@ -1,0 +1,28 @@
+{
+  "name": "tg-archive",
+  "version": "1.0.0",
+  "description": "A tool that connects to Telegram servers and dumps the relevant data",
+  "main": "index.ts",
+  "scripts": {
+    "start": "bun index.ts",
+    "import:backups": "bun importBackup.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "AGPL-3.0-only",
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "mime-types": "^2.1.35",
+    "minio": "^8.0.2",
+    "mongodb": "^6.5.0",
+    "qrcode": "^1.5.3",
+    "telegram": "^2.20.10",
+    "typescript": "^5.4.4"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.13",
+    "@types/mime-types": "^2.1.4",
+    "@types/node": "^22.9.0",
+    "@types/qrcode": "^1.5.5"
+  }
+}

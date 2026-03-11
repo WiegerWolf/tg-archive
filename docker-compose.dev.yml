@@ -1,0 +1,44 @@
+services:
+  admin:
+    image: oven/bun:1
+    working_dir: /usr/src/app
+    command: sh -c "bun install --frozen-lockfile && bun --watch index.ts"
+    environment:
+      - DIALOG_ACTIVITY_STALE_MS=90000
+    volumes:
+      - ./admin:/usr/src/app
+      - admin_node_modules:/usr/src/app/node_modules
+
+  agent:
+    image: oven/bun:1
+    working_dir: /usr/src/app
+    command: sh -c "bun install --frozen-lockfile && IMPORT_BEFORE_LIVE_SYNC=false BACKFILL_STALE_LOCK_MS=90000 bun --watch index.ts"
+    volumes:
+      - ./agent:/usr/src/app
+      - agent_node_modules:/usr/src/app/node_modules
+      - ${TELEGRAM_EXPORTS_DIR:-./.local-dev/telegram-exports}:/exports:ro
+
+  admin-web:
+    image: oven/bun:1
+    working_dir: /usr/src/app
+    command: sh -c "bun install --frozen-lockfile && bun run dev:web"
+    environment:
+      - VITE_API_BASE=http://admin:3000
+      - VITE_HOST=0.0.0.0
+      - VITE_PORT=5173
+      - CHOKIDAR_USEPOLLING=true
+      - CHOKIDAR_INTERVAL=500
+    volumes:
+      - ./admin:/usr/src/app
+      - admin_web_node_modules:/usr/src/app/node_modules
+    ports:
+      - "5173:5173"
+    depends_on:
+      - admin
+    networks:
+      - app-network
+
+volumes:
+  admin_node_modules:
+  admin_web_node_modules:
+  agent_node_modules:

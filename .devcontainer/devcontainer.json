@@ -1,0 +1,32 @@
+{
+	"name": "node+mongo",
+	"dockerComposeFile": "docker-compose.yml",
+	"service": "app",
+	"workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+  
+	"features": {
+	  "ghcr.io/shyim/devcontainers-features/bun:0": {}
+	},
+  
+	"customizations": {
+	  "vscode": {
+		"extensions": [
+			"mongodb.mongodb-vscode",
+			"redhat.vscode-yaml",
+			"ms-azuretools.vscode-docker",
+			"vscode-icons-team.vscode-icons",
+			"actboy168.tasks",
+			"mhutchie.git-graph",
+			"DigitalBrainstem.javascript-ejs-support",
+			"oven.bun-vscode"
+		]
+	  }
+	},
+  
+	// Forward ports for MongoDB, MinIO API and Console
+	"forwardPorts": [27017, 9000, 9001],
+  
+	// Initialize MinIO bucket after container creation
+	"postCreateCommand": "mc alias set myminio http://minio:9000 minioadmin minioadmin && mc mb myminio/tg-archive || true"
+  }
+  
