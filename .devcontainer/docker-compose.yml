@@ -20,8 +20,8 @@ services:
     image: minio/minio
     restart: unless-stopped
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: tgarchive_dev
+      MINIO_ROOT_PASSWORD: tgarchive_dev_password
       MINIO_DOMAIN: minio
       MINIO_REGION_NAME: us-east-1
     command: server /data --console-address ":9001"

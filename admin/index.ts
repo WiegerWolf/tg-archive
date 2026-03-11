@@ -11,14 +11,14 @@ const minioClient = new Minio.Client({
     endPoint: process.env.MINIO_ENDPOINT || 'localhost',
     port: parseInt(process.env.MINIO_PORT || '9000'),
     useSSL: process.env.MINIO_USE_SSL === 'true',
-    accessKey: process.env.MINIO_ACCESS_KEY || 'minioadmin',
-    secretKey: process.env.MINIO_SECRET_KEY || 'minioadmin'
+    accessKey: process.env.MINIO_ACCESS_KEY || '',
+    secretKey: process.env.MINIO_SECRET_KEY || ''
 });
 
 const app = express();
 const port = process.env.PORT || 3000;
 const adminPassword = String(process.env.ADMIN_PASSWORD || '').trim();
-const adminCookieSecret = String(process.env.ADMIN_COOKIE_SECRET || adminPassword).trim();
+const adminCookieSecret = String(process.env.ADMIN_COOKIE_SECRET || '').trim();
 const adminSessionTtlMs = Math.max(60_000, parseInt(process.env.ADMIN_SESSION_TTL_MS || '1209600000', 10) || 1209600000);
 const adminCookieName = 'tg_archive_admin_session';
 const adminCookieSecure = process.env.ADMIN_COOKIE_SECURE === 'true';
@@ -297,7 +297,7 @@ function sendUnauthorized(req: express.Request, res: express.Response) {
 }
 
 if (!isAdminAuthConfigured()) {
-    console.warn('ADMIN_PASSWORD is not configured; admin auth is disabled until it is set.');
+    console.warn('ADMIN_PASSWORD is not configured; admin routes stay unavailable until it is set.');
 }
 
 app.get(loginRoute, (req, res) => {
@@ -334,7 +334,10 @@ app.post(logoutRoute, (_req, res) => {
 
 app.use((req, res, next) => {
     if (!isAdminAuthConfigured()) {
-        return next();
+        if (req.path === loginRoute || req.path === logoutRoute) {
+            return next();
+        }
+        return res.status(503).send('Admin authentication is not configured. Set ADMIN_PASSWORD first.');
     }
     if (req.path === loginRoute || req.path === logoutRoute) {
         return next();

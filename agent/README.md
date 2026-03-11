@@ -36,8 +36,8 @@ MONGO_URI=mongodb://db/tgArchive
 # MinIO Configuration
 S3_ENDPOINT_HOST=minio
 S3_ENDPOINT_PORT=9000
-S3_ACCESS_KEY=minioadmin
-S3_SECRET_KEY=minioadmin
+S3_ACCESS_KEY=your_minio_access_key
+S3_SECRET_KEY=your_minio_secret_key
 S3_BUCKET_NAME=tg-archive
 S3_REGION=us-east-1
 

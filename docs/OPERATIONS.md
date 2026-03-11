@@ -14,8 +14,8 @@ Use this guide for everyday operations.
 - repo path: `<repo-path>`
 - boot service: `<systemd-service>`
 - admin app: `http://<server-host>:3000/login`
-- MinIO API: `http://<server-host>:9000`
-- MinIO console: `http://<server-host>:19001`
+- MinIO API: bind locally by default; expose it intentionally if you need remote access
+- MinIO console: bind locally by default; expose it intentionally if you need remote access
 - Mongo data: Docker volume `tg-archive_mongodb_data`
 - MinIO data: `<minio-data-dir>`
 

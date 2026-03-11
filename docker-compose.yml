@@ -10,7 +10,7 @@ services:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
       - ADMIN_COOKIE_SECRET=${ADMIN_COOKIE_SECRET:-}
       - ADMIN_SESSION_TTL_MS=${ADMIN_SESSION_TTL_MS:-1209600000}
-      - ADMIN_COOKIE_SECURE=${ADMIN_COOKIE_SECURE:-false}
+      - ADMIN_COOKIE_SECURE=${ADMIN_COOKIE_SECURE:-true}
       - MINIO_ENDPOINT=minio
       - MINIO_PORT=9000
       - MINIO_USE_SSL=false
@@ -72,8 +72,8 @@ services:
         bind:
           create_host_path: false
     ports:
-      - "${MINIO_API_PORT:-9000}:9000"
-      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+      - "${MINIO_BIND_HOST:-127.0.0.1}:${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_BIND_HOST:-127.0.0.1}:${MINIO_CONSOLE_PORT:-9001}:9001"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 30s

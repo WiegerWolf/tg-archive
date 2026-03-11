@@ -46,14 +46,20 @@ Create a `.env` file based on `.env.example`:
 # MongoDB Configuration
 MONGO_URI=mongodb://db/tgArchive
 
+# Admin Authentication
+ADMIN_PASSWORD=choose_a_strong_password
+ADMIN_COOKIE_SECRET=choose_a_long_random_secret
+
 # MinIO Configuration
 MINIO_ENDPOINT=minio
 MINIO_PORT=9000
 MINIO_USE_SSL=false
-MINIO_ACCESS_KEY=minioadmin
-MINIO_SECRET_KEY=minioadmin
+MINIO_ACCESS_KEY=your_minio_access_key
+MINIO_SECRET_KEY=your_minio_secret_key
 MINIO_BUCKET_NAME=tg-archive
 ```
+
+`ADMIN_PASSWORD` enables the login screen. `ADMIN_COOKIE_SECRET` signs the session cookie and should be set explicitly in any non-throwaway environment.
 
 ## Installation
 

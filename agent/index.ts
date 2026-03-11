@@ -196,8 +196,7 @@ async function getTelegramClient() {
     await savePersistedTelegramSession(savedSessionString);
 
     if (!envSessionString && !persistedSessionString) {
-      console.log("This is your 'TELEGRAM_SESSION_STRING' environment variable:");
-      console.log(savedSessionString);
+      console.log("Telegram session created and stored locally. Copy it from your persisted environment only if you explicitly need it.");
     }
 
     tgClient = client;

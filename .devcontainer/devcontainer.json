@@ -27,6 +27,6 @@
 	"forwardPorts": [27017, 9000, 9001],
   
 	// Initialize MinIO bucket after container creation
-	"postCreateCommand": "mc alias set myminio http://minio:9000 minioadmin minioadmin && mc mb myminio/tg-archive || true"
+	"postCreateCommand": "mc alias set myminio http://minio:9000 tgarchive_dev tgarchive_dev_password && mc mb myminio/tg-archive || true"
   }
   

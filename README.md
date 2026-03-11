@@ -28,7 +28,7 @@ A comprehensive system for archiving and managing Telegram conversations, consis
 
 1. Clone the repository
 
-2. Create a `.env` file in the root directory with your Telegram credentials:
+2. Create a `.env` file in the root directory with the required credentials and storage settings:
 ```env
 TELEGRAM_API_ID=your_api_id
 TELEGRAM_API_HASH=your_api_hash
@@ -36,14 +36,25 @@ TELEGRAM_PASSWORD=your_2fa_password_if_enabled
 TELEGRAM_SESSION_STRING=your_session_string
 ADMIN_PASSWORD=choose_a_strong_password
 ADMIN_COOKIE_SECRET=choose_a_long_random_secret
+MINIO_ROOT_USER=choose_a_minio_root_user
+MINIO_ROOT_PASSWORD=choose_a_minio_root_password
 ```
 
-`ADMIN_PASSWORD` enables the admin login screen. `ADMIN_COOKIE_SECRET` signs the login cookie and should be a long random string.
+`ADMIN_PASSWORD` enables the admin login screen. `ADMIN_COOKIE_SECRET` signs the login cookie and should be a long random string. `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD` are required by the bundled MinIO service.
 
-3. Start the system using Docker Compose:
+For local HTTP-only development, set `ADMIN_COOKIE_SECURE=false`. For any real deployment behind HTTPS, keep it `true`.
+
+3. Create the local MinIO data directory:
+```bash
+mkdir -p ./data/minio-data
+```
+
+4. Start the system using Docker Compose:
 ```bash
 docker compose up -d
 ```
+
+By default, the MinIO API and console bind to `127.0.0.1` only. If you need remote access, set `MINIO_BIND_HOST` explicitly.
 
 This will start:
 - Admin interface on http://localhost:3000
