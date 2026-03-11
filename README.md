@@ -1,6 +1,55 @@
-# Telegram Archive System
+<p align="center">
+  <img src="./admin/web/public/logo.svg" alt="Telegram Archive logo" width="180">
+</p>
 
-A comprehensive system for archiving and managing Telegram conversations, consisting of a Telegram agent for data collection and a web-based admin interface for viewing and managing the archived data.
+<h1 align="center">Telegram Archive</h1>
+
+<p align="center">
+  Archive Telegram conversations, media, and history with a self-hosted sync agent and a searchable web UI.
+</p>
+
+<p align="center">
+  <img src="./docs/main-view.png" alt="Telegram Archive main dashboard" width="900">
+</p>
+
+## What It Does
+
+- Syncs Telegram chats, media, and metadata into your own storage
+- Keeps historical changes so edits, deletions, and dialog updates are inspectable
+- Provides a web admin for browsing dialogs, searching messages, and reviewing timelines
+- Stores structured data in MongoDB and media in MinIO-compatible object storage
+
+## Product Tour
+
+### Main dashboard
+
+Browse archived dialogs, scan recent activity, and jump into the archive from a high-level overview.
+
+![Main dashboard](./docs/main-view.png)
+
+### Dialog details
+
+Inspect a single conversation with participant context, metadata, and message-level navigation.
+
+![Dialog details](./docs/dialog-view.png)
+
+### Search across the archive
+
+Find messages and conversations quickly with archive-wide search and targeted results.
+
+![Search results](./docs/search-results.png)
+
+### Message history and changes
+
+Review edits, removals, and historical message states to understand how a conversation evolved.
+
+![Message history](./docs/message-history.png)
+
+### Agent activity
+
+Monitor sync state and background activity from the admin interface while imports and live updates run.
+
+![Agent sidebar](./docs/agent-sidebar.png)
 
 ## System Components
 
