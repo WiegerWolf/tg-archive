@@ -886,7 +886,7 @@ async function loadDialogDetails(db: any, id: string) {
     const tgChatIdFilter = buildTgChatIdFilter(id);
     const messages = await db.collection('messages')
         .find(tgChatIdFilter)
-        .sort({ 'metadata.originalDate': -1 })
+        .sort({ 'metadata.originalDate': -1, tgMessageId: -1 })
         .limit(5)
         .toArray();
 
@@ -899,7 +899,7 @@ async function loadDialogMessagesPage(db: any, chatId: number, page: number, lim
     const [messages, totalCount] = await Promise.all([
         db.collection('messages')
             .find(tgChatIdFilter)
-            .sort({ 'metadata.originalDate': -1 })
+            .sort({ 'metadata.originalDate': -1, tgMessageId: -1 })
             .skip(skip)
             .limit(limit)
             .toArray(),
