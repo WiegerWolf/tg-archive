@@ -234,6 +234,7 @@ type DialogContextSnapshot = {
 };
 
 const dialogContextCache = new Map<string, DialogContextSnapshot>();
+const liveDiscoveredDialogIds = new Set<string>();
 
 async function getMongoDbClient() {
   if (dbClient) {
@@ -2038,6 +2039,7 @@ async function syncHistoricalMessages(
 
 async function handleNewMessageEvent(incomingMessageEvent: NewMessageEvent) {
   const { message } = incomingMessageEvent;
+  await ensureDialogExistsForLiveMessage(message);
   const chatId = message.chatId?.toString() || extractPeerIdentifier((message as any).peerId);
   
   if (!chatId || !(await isLiveSyncEnabled(chatId))) {
@@ -2045,6 +2047,137 @@ async function handleNewMessageEvent(incomingMessageEvent: NewMessageEvent) {
   }
 
   await handleMessage(message);
+}
+
+type LiveDialogSeed = {
+  tgDialogId: TelegramDialogId;
+  title?: string;
+  firstName?: string;
+  lastName?: string;
+  username?: string;
+  chatType?: string;
+  isUser: boolean;
+  isGroup: boolean;
+  isChannel: boolean;
+  entity: {
+    className?: string;
+    bot?: boolean;
+    deleted?: boolean;
+    username?: string;
+    firstName?: string;
+    lastName?: string;
+    title?: string;
+    megagroup?: boolean;
+    broadcast?: boolean;
+  };
+};
+
+function parseLiveDialogSeed(message: Api.Message): LiveDialogSeed | undefined {
+  const peerId = (message as any).peerId;
+  const chatId = message.chatId?.toString() || extractPeerIdentifier(peerId);
+  if (!chatId || !isValidTelegramDialogId(chatId)) {
+    return undefined;
+  }
+
+  const chatEntity = (message as any).chat;
+  const peerClassName = typeof peerId?.className === 'string' ? peerId.className : '';
+  const entityClassName = typeof chatEntity?.className === 'string' ? chatEntity.className : '';
+  const isMegagroup = Boolean(chatEntity?.megagroup);
+
+  const inferredIsUser = peerClassName === 'PeerUser' || entityClassName.includes('User');
+  const inferredIsGroup = peerClassName === 'PeerChat'
+    || (peerClassName === 'PeerChannel' && isMegagroup)
+    || (entityClassName.includes('Chat') && !entityClassName.includes('Channel'));
+  const inferredIsChannel = peerClassName === 'PeerChannel'
+    ? !isMegagroup
+    : (entityClassName.includes('Channel') && !isMegagroup);
+
+  const title = typeof chatEntity?.title === 'string' ? chatEntity.title.trim() : '';
+  const firstName = typeof chatEntity?.firstName === 'string' ? chatEntity.firstName.trim() : '';
+  const lastName = typeof chatEntity?.lastName === 'string' ? chatEntity.lastName.trim() : '';
+  const username = typeof chatEntity?.username === 'string' ? chatEntity.username.trim() : '';
+  const fallbackName = resolveDisplayName(chatEntity) || '';
+  const normalizedTitle = title || (!firstName && !lastName ? fallbackName : '');
+  const chatType = inferredIsUser
+    ? (chatEntity?.bot ? 'bot' : 'user')
+    : inferredIsGroup
+      ? 'group'
+      : inferredIsChannel
+        ? 'channel'
+        : undefined;
+
+  return {
+    tgDialogId: createTelegramDialogId(chatId),
+    title: normalizedTitle || undefined,
+    firstName: firstName || undefined,
+    lastName: lastName || undefined,
+    username: username || undefined,
+    chatType,
+    isUser: inferredIsUser,
+    isGroup: inferredIsGroup,
+    isChannel: inferredIsChannel,
+    entity: {
+      className: entityClassName || undefined,
+      bot: Boolean(chatEntity?.bot) || undefined,
+      deleted: Boolean(chatEntity?.deleted) || undefined,
+      username: username || undefined,
+      firstName: firstName || undefined,
+      lastName: lastName || undefined,
+      title: title || undefined,
+      megagroup: isMegagroup || undefined,
+      broadcast: Boolean(chatEntity?.broadcast) || undefined,
+    },
+  };
+}
+
+async function ensureDialogExistsForLiveMessage(message: Api.Message) {
+  const seed = parseLiveDialogSeed(message);
+  if (!seed) {
+    return;
+  }
+
+  if (liveDiscoveredDialogIds.has(seed.tgDialogId)) {
+    return;
+  }
+
+  const db = await getMongoDbClient();
+  const dialogsCollection = db.collection<DialogDocument>('dialogs');
+  const now = new Date();
+  const upsertResult = await dialogsCollection.updateOne(
+    { tgDialogId: seed.tgDialogId },
+    {
+      $setOnInsert: prepareFoMongoDB({
+        tgDialogId: seed.tgDialogId,
+        title: seed.title,
+        firstName: seed.firstName,
+        lastName: seed.lastName,
+        username: seed.username,
+        chatType: seed.chatType,
+        isUser: seed.isUser,
+        isGroup: seed.isGroup,
+        isChannel: seed.isChannel,
+        archived: false,
+        pinned: false,
+        entity: seed.entity,
+        metadata: {
+          firstArchived: now,
+          lastUpdated: now,
+          version: 1,
+          updateCount: 1,
+          changeHistory: [],
+        },
+      }),
+    },
+    { upsert: true },
+  );
+
+  if ((upsertResult.upsertedCount || 0) > 0) {
+    console.log(`Discovered new dialog from live message: ${seed.tgDialogId}`);
+  }
+
+  if ((upsertResult.matchedCount || 0) > 0 || (upsertResult.upsertedCount || 0) > 0) {
+    liveDiscoveredDialogIds.add(seed.tgDialogId);
+  }
 }
 
 async function handleReactionUpdateEvent(update: Api.UpdateMessageReactions) {
