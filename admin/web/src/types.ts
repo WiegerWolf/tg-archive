@@ -61,8 +61,8 @@ export type Dialog = {
 
 export type RouteState =
   | { name: 'home' }
-  | { name: 'dialog'; chatId: string }
-  | { name: 'messages'; chatId: string; page: number }
+  | { name: 'dialog'; chatId: string; around?: number; date?: string }
+  | { name: 'messages'; chatId: string; page?: number; around?: number; date?: string }
   | { name: 'timeline'; chatId: string; page: number }
   | { name: 'search'; query: string; page: number; chatId?: string }
   | { name: 'message'; messageId: string; chatId?: string }

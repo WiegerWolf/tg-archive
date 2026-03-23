@@ -2,13 +2,13 @@ import { useRouter } from './hooks/useRouter';
 import { useAgentStatus } from './hooks/useAgentStatus';
 import { useDialogs } from './hooks/useDialogs';
 import { useDialogDetail } from './hooks/useDialogDetail';
-import { useMessages, useMessageContext, useArchivedMessageSearch, useDialogTimeline, useMessageHistory } from './hooks/useMessages';
+import { useMessageContext, useArchivedMessageSearch, useDialogTimeline, useMessageHistory } from './hooks/useMessages';
+import { useChatScroll } from './hooks/useChatScroll';
 import { dialogDisplayTitle } from './lib/format';
 import { NavBar } from './components/layout/NavBar';
 import { AgentDrawer } from './components/layout/AgentDrawer';
 import { HomePage } from './components/home/HomePage';
 import { DialogDetailPage } from './components/dialog/DialogDetailPage';
-import { MessagesPage } from './components/messages/MessagesPage';
 import { TimelinePage } from './components/messages/TimelinePage';
 import { MessageHistoryPage } from './components/messages/MessageHistoryPage';
 import { SearchPage } from './components/messages/SearchPage';
@@ -29,9 +29,9 @@ export function App() {
   const dialogChatId = route.name === 'dialog' ? route.chatId : null;
   const detail = useDialogDetail(dialogChatId);
 
-  const messagesChatId = route.name === 'messages' ? route.chatId : null;
-  const messagesPage = route.name === 'messages' ? route.page : null;
-  const msgs = useMessages(messagesChatId, messagesPage);
+  const chatScrollChatId = route.name === 'dialog' ? route.chatId : null;
+  const chatScrollOptions = route.name === 'dialog' ? { around: route.around, date: route.date } : undefined;
+  const chat = useChatScroll(chatScrollChatId, chatScrollOptions);
 
   const timelineChatId = route.name === 'timeline' ? route.chatId : null;
   const timelinePage = route.name === 'timeline' ? route.page : null;
@@ -50,29 +50,6 @@ export function App() {
   const messageHistoryChatId = route.name === 'messageHistory' ? route.chatId || null : null;
   const msgHistory = useMessageHistory(messageHistoryId, messageHistoryChatId);
 
-  // For dialog detail view: compute message side based on dialog data
-  const detailGetSide = detail.dialog
-    ? (() => {
-        const isUserChat = detail.dialog.isUser;
-        const isGroupOrChannel = detail.dialog.isGroup || detail.dialog.isChannel;
-        const peerId = detail.dialog.tgDialogId;
-        const isOneToOne = !!(isUserChat && !isGroupOrChannel && peerId);
-        return (msg: any) => {
-          if (!isOneToOne || !msg.sender?.id) return 'left' as const;
-          const numericSenderId = msg.sender.id.replace(/^user/, '');
-          return numericSenderId === peerId ? 'left' as const : 'right' as const;
-        };
-      })()
-    : () => 'left' as const;
-
-  function isSameSenderAsPrev(messages: any[], idx: number): boolean {
-    if (idx === 0) return false;
-    const prev = messages[idx - 1];
-    const curr = messages[idx];
-    if (prev.type === 'service' || curr.type === 'service') return false;
-    return prev.sender?.name === curr.sender?.name;
-  }
-
   const routeDialog = routeChatId ? dialogsStore.dialogs.find((dialog) => dialog.tgDialogId === routeChatId) || null : null;
   const dialogTitle = route.name === 'dialog'
     ? (detail.dialog ? dialogDisplayTitle(detail.dialog) : '')
@@ -82,7 +59,7 @@ export function App() {
   const dialogMessageCount = route.name === 'dialog'
     ? routeDialog?.messageCount ?? detail.dialog?.messageCount
     : routeDialog?.messageCount;
-  const viewError = detail.error || msgs.error || timeline.error || msgContext.error || msgHistory.error;
+  const viewError = detail.error || (route.name === 'dialog' ? chat.error : '') || timeline.error || msgContext.error || msgHistory.error;
 
   return (
     <div className="min-h-screen">
@@ -150,7 +127,6 @@ export function App() {
         {route.name === 'dialog' && (
           <DialogDetailPage
             dialog={detail.dialog}
-            messages={detail.messages}
             loading={detail.loading}
             refreshing={detail.refreshing}
             onRefresh={detail.reload}
@@ -163,20 +139,7 @@ export function App() {
             }}
             activity={dialogsStore.dialogActivity(route.chatId)}
             reconcile={agent.agentStatus.reconcile}
-            getMessageSide={detailGetSide}
-            isSameSenderAsPrev={isSameSenderAsPrev}
-          />
-        )}
-
-        {route.name === 'messages' && (
-          <MessagesPage
-            chatId={route.chatId}
-            messages={msgs.messages}
-            pagination={msgs.pagination}
-            loading={msgs.loading}
-            activity={dialogsStore.dialogActivity(route.chatId)}
-            getMessageSide={msgs.getMessageSide}
-            isSameSenderAsPrev={isSameSenderAsPrev}
+            chat={chat}
           />
         )}
 

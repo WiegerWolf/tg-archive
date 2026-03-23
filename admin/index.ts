@@ -913,6 +913,128 @@ async function loadDialogMessagesPage(db: any, chatId: number, page: number, lim
     };
 }
 
+async function loadDialogMessagesCursor(
+    db: any,
+    chatId: number,
+    options: { around?: number; before?: number; after?: number; date?: string; limit: number },
+) {
+    const tgChatIdFilter = buildTgChatIdFilter(chatId);
+    const messagesCol = db.collection('messages');
+    const limit = options.limit;
+
+    // If "around" a specific messageId, find it and load messages in both directions
+    if (options.around != null) {
+        const anchor = await messagesCol.findOne({ ...tgChatIdFilter, tgMessageId: options.around });
+        if (!anchor) {
+            // Fall back to newest messages
+            const messages = await messagesCol.find(tgChatIdFilter)
+                .sort({ 'metadata.originalDate': -1, tgMessageId: -1 })
+                .limit(limit)
+                .toArray();
+            messages.reverse();
+            return { messages: messages.map(normalizeMessageForResponse), hasOlder: messages.length === limit, hasNewer: false };
+        }
+        const half = Math.floor(limit / 2);
+        const [olderRaw, newerRaw] = await Promise.all([
+            messagesCol.find({
+                ...tgChatIdFilter,
+                $or: [
+                    { 'metadata.originalDate': { $lt: anchor.metadata.originalDate } },
+                    { 'metadata.originalDate': anchor.metadata.originalDate, tgMessageId: { $lt: anchor.tgMessageId } },
+                ],
+            }).sort({ 'metadata.originalDate': -1, tgMessageId: -1 }).limit(half).toArray(),
+            messagesCol.find({
+                ...tgChatIdFilter,
+                $or: [
+                    { 'metadata.originalDate': { $gt: anchor.metadata.originalDate } },
+                    { 'metadata.originalDate': anchor.metadata.originalDate, tgMessageId: { $gt: anchor.tgMessageId } },
+                ],
+            }).sort({ 'metadata.originalDate': 1, tgMessageId: 1 }).limit(half).toArray(),
+        ]);
+        olderRaw.reverse();
+        const messages = [...olderRaw, anchor, ...newerRaw];
+        return {
+            messages: messages.map(normalizeMessageForResponse),
+            hasOlder: olderRaw.length === half,
+            hasNewer: newerRaw.length === half,
+        };
+    }
+
+    // If jumping to a date, find the nearest message and treat like "around"
+    if (options.date) {
+        const targetDate = new Date(options.date);
+        // Find the first message on or after the target date
+        const nearest = await messagesCol.findOne(
+            { ...tgChatIdFilter, 'metadata.originalDate': { $gte: targetDate } },
+            { sort: { 'metadata.originalDate': 1, tgMessageId: 1 } },
+        );
+        if (nearest) {
+            return loadDialogMessagesCursor(db, chatId, { around: nearest.tgMessageId, limit });
+        }
+        // No messages on/after that date — just show the newest
+        const messages = await messagesCol.find(tgChatIdFilter)
+            .sort({ 'metadata.originalDate': -1, tgMessageId: -1 })
+            .limit(limit)
+            .toArray();
+        messages.reverse();
+        return { messages: messages.map(normalizeMessageForResponse), hasOlder: messages.length === limit, hasNewer: false };
+    }
+
+    // Load messages before a given messageId (scrolling up)
+    if (options.before != null) {
+        const anchor = await messagesCol.findOne({ ...tgChatIdFilter, tgMessageId: options.before });
+        if (!anchor) {
+            return { messages: [], hasOlder: false, hasNewer: true };
+        }
+        const messages = await messagesCol.find({
+            ...tgChatIdFilter,
+            $or: [
+                { 'metadata.originalDate': { $lt: anchor.metadata.originalDate } },
+                { 'metadata.originalDate': anchor.metadata.originalDate, tgMessageId: { $lt: anchor.tgMessageId } },
+            ],
+        }).sort({ 'metadata.originalDate': -1, tgMessageId: -1 }).limit(limit).toArray();
+        messages.reverse();
+        return { messages: messages.map(normalizeMessageForResponse), hasOlder: messages.length === limit, hasNewer: true };
+    }
+
+    // Load messages after a given messageId (scrolling down)
+    if (options.after != null) {
+        const anchor = await messagesCol.findOne({ ...tgChatIdFilter, tgMessageId: options.after });
+        if (!anchor) {
+            return { messages: [], hasOlder: true, hasNewer: false };
+        }
+        const messages = await messagesCol.find({
+            ...tgChatIdFilter,
+            $or: [
+                { 'metadata.originalDate': { $gt: anchor.metadata.originalDate } },
+                { 'metadata.originalDate': anchor.metadata.originalDate, tgMessageId: { $gt: anchor.tgMessageId } },
+            ],
+        }).sort({ 'metadata.originalDate': 1, tgMessageId: 1 }).limit(limit).toArray();
+        return { messages: messages.map(normalizeMessageForResponse), hasOlder: true, hasNewer: messages.length === limit };
+    }
+
+    // Default: load the newest messages (bottom of chat)
+    const messages = await messagesCol.find(tgChatIdFilter)
+        .sort({ 'metadata.originalDate': -1, tgMessageId: -1 })
+        .limit(limit)
+        .toArray();
+    messages.reverse(); // Ascending order for display
+    return { messages: messages.map(normalizeMessageForResponse), hasOlder: messages.length === limit, hasNewer: false };
+}
+
+async function loadDialogDateRange(db: any, chatId: number) {
+    const tgChatIdFilter = buildTgChatIdFilter(chatId);
+    const messagesCol = db.collection('messages');
+    const [oldest, newest] = await Promise.all([
+        messagesCol.findOne(tgChatIdFilter, { sort: { 'metadata.originalDate': 1, tgMessageId: 1 }, projection: { 'metadata.originalDate': 1 } }),
+        messagesCol.findOne(tgChatIdFilter, { sort: { 'metadata.originalDate': -1, tgMessageId: -1 }, projection: { 'metadata.originalDate': 1 } }),
+    ]);
+    return {
+        oldest: oldest?.metadata?.originalDate ?? null,
+        newest: newest?.metadata?.originalDate ?? null,
+    };
+}
+
 async function loadDialogTimelinePage(db: any, chatId: number, page: number, limit: number) {
     const skip = (page - 1) * limit;
     const tgChatIdFilter = buildTgChatIdFilter(chatId);
@@ -1100,21 +1222,8 @@ async function loadMessageContext(db: any, messageId: number, messagesPerPage = 
 
     const resolvedChatId = toChatIdString(message.tgChatId);
 
-    const messagePosition = await db.collection('messages').countDocuments({
-        ...buildTgChatIdFilter(resolvedChatId),
-        $or: [
-            { 'metadata.originalDate': { $gt: message.metadata.originalDate } },
-            {
-                'metadata.originalDate': message.metadata.originalDate,
-                tgMessageId: { $gt: message.tgMessageId },
-            },
-        ],
-    });
-
-    const page = Math.ceil((messagePosition + 1) / messagesPerPage);
     return {
         chatId: resolvedChatId,
-        page,
         messageId,
     };
 }
@@ -1343,6 +1452,51 @@ app.get(ROUTES.api.dialogMessages, async (req, res) => {
     } catch (error) {
         console.error('Error fetching messages:', error);
         res.status(500).json({ message: 'Failed to fetch messages' });
+    }
+});
+
+app.get(ROUTES.api.dialogMessagesCursor, async (req, res) => {
+    const tgChatId = parseInt(req.params.id);
+    const limit = parsePositiveInt(req.query.limit, 50, 100);
+    const around = typeof req.query.around === 'string' ? parseInt(req.query.around) : undefined;
+    const before = typeof req.query.before === 'string' ? parseInt(req.query.before) : undefined;
+    const after = typeof req.query.after === 'string' ? parseInt(req.query.after) : undefined;
+    const date = typeof req.query.date === 'string' ? req.query.date : undefined;
+
+    try {
+        const db = await getMongoDbClient();
+        const [result, dialog] = await Promise.all([
+            loadDialogMessagesCursor(db, tgChatId, { around, before, after, date, limit }),
+            db.collection('dialogs').findOne({ tgDialogId: String(tgChatId) }),
+        ]);
+
+        res.status(200).json({
+            messages: result.messages,
+            hasOlder: result.hasOlder,
+            hasNewer: result.hasNewer,
+            chatId: tgChatId,
+            dialogType: {
+                isUser: dialog?.isUser ?? false,
+                isGroup: dialog?.isGroup ?? false,
+                isChannel: dialog?.isChannel ?? false,
+            },
+        });
+    } catch (error) {
+        console.error('Error fetching cursor messages:', error);
+        res.status(500).json({ message: 'Failed to fetch messages' });
+    }
+});
+
+app.get(ROUTES.api.dialogDateRange, async (req, res) => {
+    const tgChatId = parseInt(req.params.id);
+
+    try {
+        const db = await getMongoDbClient();
+        const range = await loadDialogDateRange(db, tgChatId);
+        res.status(200).json(range);
+    } catch (error) {
+        console.error('Error fetching date range:', error);
+        res.status(500).json({ message: 'Failed to fetch date range' });
     }
 });
 

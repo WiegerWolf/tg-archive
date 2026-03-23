@@ -214,8 +214,8 @@ export function useMessageContext(messageId: string | null, chatId?: string | nu
     fetch(Paths.apiMessageContext(messageId, chatId || undefined), { headers: { Accept: 'application/json' } })
       .then(async (response) => {
         if (!response.ok) throw new Error('Message not found');
-        const payload = (await response.json()) as { chatId: string | number; page: number; messageId: number };
-        navigate(`${Paths.dialogMessages(payload.chatId, payload.page)}#msg-${payload.messageId}`, { replace: true });
+        const payload = (await response.json()) as { chatId: string | number; messageId: number };
+        navigate(`${Paths.dialog(payload.chatId, { around: payload.messageId })}#msg-${payload.messageId}`, { replace: true });
       })
       .catch((err) => setError(err instanceof Error ? err.message : 'Failed to resolve message link'));
   }, [messageId, chatId]);

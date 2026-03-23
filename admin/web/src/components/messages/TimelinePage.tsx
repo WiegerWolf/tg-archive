@@ -66,7 +66,7 @@ export function TimelinePage({ chatId, timeline, pagination, loading }: {
       <div className="sticky top-14 z-30 -mx-4 border-b border-zinc-200 bg-zinc-50/95 px-4 py-3 backdrop-blur-sm sm:-mx-6 sm:px-6">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <Button variant="ghost" size="sm" onClick={() => navigate(Paths.dialogMessages(chatId, 1))}>
+            <Button variant="ghost" size="sm" onClick={() => navigate(Paths.dialog(chatId))}>
               <ChevronLeft className="h-4 w-4" /> Latest Messages
             </Button>
             <div>

@@ -1,5 +1,6 @@
-import { BadgeCheck, Bot, ChevronLeft, ChevronRight, ExternalLink, Radio, RefreshCcw, User, Users } from 'lucide-react';
-import { Paths, type DialogActivityItem } from '@shared/api';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { BadgeCheck, Bot, Calendar, ChevronDown, ChevronLeft, ChevronRight, ExternalLink, Loader2, Radio, RefreshCcw, User, Users } from 'lucide-react';
+import { Paths, type DialogActivityItem, type DateRangeResponse } from '@shared/api';
 import type { Dialog } from '../../types';
 import type { ArchiveMessage } from '../MessageCard';
 import { DateSeparator, MessageCard } from '../MessageCard';
@@ -10,6 +11,9 @@ import { Skeleton } from '../ui/skeleton';
 import { navigate } from '../../hooks/useRouter';
 import { activityLabel, activityVariant, dialogDisplayTitle, dialogStatus, dialogType, formatActivityProgress, prettyNumber } from '../../lib/format';
 import type { AgentStatusResponse } from '@shared/api';
+import type { useChatScroll } from '../../hooks/useChatScroll';
+
+type ChatScrollReturn = ReturnType<typeof useChatScroll>;
 
 const typeIconMap = {
   user: User,
@@ -94,21 +98,8 @@ function MobileSkeleton() {
   );
 }
 
-function MessagesSkeleton() {
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-3">
-        <Skeleton className="h-4 w-32" />
-        <Skeleton className="h-7 w-20 rounded-lg" />
-      </div>
-      <Skeleton className="h-[500px] w-full rounded-xl" />
-    </div>
-  );
-}
-
-export function DialogDetailPage({ dialog, messages, loading, refreshing, onRefresh, messageCount, liveSyncSelected, syncSaving, onToggleSync, activity, reconcile, getMessageSide, isSameSenderAsPrev }: {
+export function DialogDetailPage({ dialog, loading, refreshing, onRefresh, messageCount, liveSyncSelected, syncSaving, onToggleSync, activity, reconcile, chat }: {
   dialog: Dialog | null;
-  messages: ArchiveMessage[];
   loading: boolean;
   refreshing: boolean;
   onRefresh: () => void;
@@ -118,9 +109,25 @@ export function DialogDetailPage({ dialog, messages, loading, refreshing, onRefr
   onToggleSync: () => void | Promise<void>;
   activity?: DialogActivityItem;
   reconcile?: AgentStatusResponse['reconcile'];
-  getMessageSide: (msg: ArchiveMessage) => 'left' | 'right';
-  isSameSenderAsPrev: (msgs: ArchiveMessage[], idx: number) => boolean;
+  chat: ChatScrollReturn;
 }) {
+  const {
+    messages,
+    hasOlder,
+    hasNewer,
+    loadState,
+    initialLoadDone,
+    scrollRef,
+    shouldScrollBottom,
+    anchorMessageId,
+    getMessageSide,
+    isSameSenderAsPrev,
+    loadOlder,
+    loadNewer,
+    jumpToNewest,
+    jumpToDate,
+  } = chat;
+
   /* ── Loading state ── */
   if (loading || !dialog) {
     return (
@@ -128,7 +135,15 @@ export function DialogDetailPage({ dialog, messages, loading, refreshing, onRefr
         <div className="flex gap-8">
           <aside className="hidden w-80 shrink-0 lg:block"><SidebarSkeleton /></aside>
           <div className="w-full lg:hidden"><MobileSkeleton /></div>
-          <div className="hidden lg:block flex-1 min-w-0"><MessagesSkeleton /></div>
+          <div className="hidden lg:block flex-1 min-w-0">
+            <div className="space-y-2 rounded-xl bg-zinc-100/50 p-4">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <div key={i} className={`flex ${i % 3 === 0 ? 'justify-end' : ''}`}>
+                  <Skeleton className={`h-12 rounded-2xl ${i % 2 === 0 ? 'w-2/3' : 'w-1/2'}`} />
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -145,7 +160,6 @@ export function DialogDetailPage({ dialog, messages, loading, refreshing, onRefr
   const reconcileProgressLine = reconcile?.chatProgress?.totalMessages
     ? `${prettyNumber(reconcile.chatProgress.processedMessages)}/${prettyNumber(reconcile.chatProgress.totalMessages)} scanned · +${prettyNumber(reconcile.chatProgress.importedMessages)} imported · ${prettyNumber(reconcile.chatProgress.skippedExistingMessages)} existing`
     : null;
-  const previewMessages = [...messages].reverse();
   const participantSummary = typeof dialog.entity?.participantsCount === 'number'
     ? prettyNumber(dialog.entity.participantsCount)
     : null;
@@ -160,20 +174,6 @@ export function DialogDetailPage({ dialog, messages, loading, refreshing, onRefr
   ].filter(Boolean) as Array<{ label: string; variant: 'muted' | 'danger' }>;
   const progressLine = activityText || (reconcileActive && reconcileProgressLine) || null;
   const hasFlags = statusFlags.length > 0 || (activityBadge && activity?.phase !== 'idle');
-
-  function navigateMessage(id: number, chatId?: string) {
-    const hash = `#msg-${id}`;
-    const hasMessageOnPage = previewMessages.some((message) => message.tgMessageId === id);
-    if (hasMessageOnPage) {
-      if (window.location.hash === hash) {
-        window.dispatchEvent(new HashChangeEvent('hashchange'));
-      } else {
-        window.location.hash = hash;
-      }
-      return;
-    }
-    navigate(Paths.message(id, chatId || dialog.tgDialogId));
-  }
 
   /* ── Shared UI fragments ── */
   const syncButton = (
@@ -199,51 +199,9 @@ export function DialogDetailPage({ dialog, messages, loading, refreshing, onRefr
     ? <div className="rounded-lg bg-zinc-100 px-3 py-2 text-xs text-zinc-600 leading-relaxed">{progressLine}</div>
     : null;
 
-  const messagesSection = (
-    <section>
-      <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-[13px] font-medium text-zinc-500 uppercase tracking-wide">
-          Recent messages
-          {previewMessages.length > 0 && <span className="ml-1.5 normal-case tracking-normal font-normal text-zinc-400">({previewMessages.length})</span>}
-        </h2>
-        <div className="flex items-center gap-2">
-          <Button variant="ghost" size="xs" onClick={() => navigate(Paths.dialogTimeline(dialog.tgDialogId, 1))}>
-            Timeline
-          </Button>
-          <Button variant="ghost" size="xs" onClick={() => navigate(Paths.dialogMessages(dialog.tgDialogId, 1))}>
-            View all <ChevronRight className="h-3 w-3" />
-          </Button>
-        </div>
-      </div>
-
-      {previewMessages.length > 0 ? (
-        <div className="rounded-xl border border-zinc-200 bg-zinc-100/60 p-2 sm:p-3">
-          {previewMessages.map((msg, idx) => {
-            const prevMsg = previewMessages[idx - 1];
-            const curDate = msg.metadata?.originalDate ? new Date(msg.metadata.originalDate as string | number | Date) : null;
-            const prevDate = prevMsg?.metadata?.originalDate ? new Date(prevMsg.metadata.originalDate as string | number | Date) : null;
-            const showDate = curDate && (!prevDate || curDate.toDateString() !== prevDate.toDateString());
-            const sameSender = !showDate && isSameSenderAsPrev(previewMessages, idx);
-
-            return (
-              <div key={msg.tgMessageId}>
-                {showDate && curDate ? <DateSeparator date={curDate} /> : null}
-                <MessageCard message={msg} onNavigateMessage={navigateMessage} side={getMessageSide(msg)} showSender={!sameSender} />
-              </div>
-            );
-          })}
-        </div>
-      ) : (
-        <div className="flex items-center justify-center rounded-xl border border-zinc-200 bg-white py-16 text-sm text-zinc-400">
-          No messages archived yet.
-        </div>
-      )}
-    </section>
-  );
-
   return (
     <div className="animate-fade-in">
-      <div className="flex gap-8">
+      <div className="flex gap-8" style={{ height: 'calc(100vh - 6rem)' }}>
 
         {/* ── Desktop sidebar ── */}
         <aside className="hidden w-80 shrink-0 lg:block">
@@ -320,9 +278,8 @@ export function DialogDetailPage({ dialog, messages, loading, refreshing, onRefr
 
             {/* Actions */}
             <div className="space-y-2">
-              <Button className="w-full justify-between" onClick={() => navigate(Paths.dialogMessages(dialog.tgDialogId, 1))}>
-                View All Messages
-                <ChevronRight className="h-4 w-4" />
+              <Button variant="outline" size="sm" className="w-full" onClick={() => navigate(Paths.dialogTimeline(dialog.tgDialogId, 1))}>
+                Timeline
               </Button>
               <div className="flex gap-2">
                 {syncButton}
@@ -339,11 +296,11 @@ export function DialogDetailPage({ dialog, messages, loading, refreshing, onRefr
           </div>
         </aside>
 
-        {/* ── Main content area ── */}
-        <div className="min-w-0 flex-1">
+        {/* ── Main content area: Chat scroll ── */}
+        <div className="min-w-0 flex-1 flex flex-col">
 
           {/* Mobile header (below lg) */}
-          <div className="mb-4 space-y-3 lg:hidden">
+          <div className="mb-3 space-y-3 lg:hidden">
             <div className="flex items-center gap-3">
               <button onClick={() => navigate('/')} className="shrink-0 rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 transition-colors">
                 <ChevronLeft className="h-4 w-4" />
@@ -369,9 +326,6 @@ export function DialogDetailPage({ dialog, messages, loading, refreshing, onRefr
             </div>
 
             <div className="flex gap-2">
-              <Button size="sm" className="flex-1" onClick={() => navigate(Paths.dialogMessages(dialog.tgDialogId, 1))}>
-                All Messages <ChevronRight className="h-3.5 w-3.5" />
-              </Button>
               {syncButton}
               {refreshButton}
             </div>
@@ -379,11 +333,14 @@ export function DialogDetailPage({ dialog, messages, loading, refreshing, onRefr
             {feedbackBanner}
           </div>
 
-          {/* Messages */}
-          {messagesSection}
+          {/* Chat messages with infinite scroll */}
+          <ChatScrollArea
+            chatId={dialog.tgDialogId}
+            chat={chat}
+          />
 
           {/* Mobile-only details (collapsible) */}
-          <details className="mt-4 group rounded-xl border border-zinc-200 bg-white shadow-sm lg:hidden">
+          <details className="mt-3 group rounded-xl border border-zinc-200 bg-white shadow-sm lg:hidden">
             <summary className="flex cursor-pointer select-none list-none items-center gap-2 px-5 py-3 text-[13px] font-medium text-zinc-500 uppercase tracking-wide hover:text-zinc-700 [&::-webkit-details-marker]:hidden">
               <ChevronRight className="h-3.5 w-3.5 shrink-0 text-zinc-400 transition-transform duration-200 group-open:rotate-90" />
               Dialog Details
@@ -394,6 +351,250 @@ export function DialogDetailPage({ dialog, messages, loading, refreshing, onRefr
           </details>
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ── Chat scroll area (extracted for clarity) ── */
+
+function ChatScrollArea({ chatId, chat }: { chatId: string; chat: ChatScrollReturn }) {
+  const {
+    messages,
+    hasOlder,
+    hasNewer,
+    loadState,
+    loading: chatLoading,
+    initialLoadDone,
+    scrollRef,
+    shouldScrollBottom,
+    anchorMessageId,
+    getMessageSide,
+    isSameSenderAsPrev,
+    loadOlder,
+    loadNewer,
+    jumpToNewest,
+    jumpToDate,
+  } = chat;
+
+  // Date range for calendar picker
+  const [dateRange, setDateRange] = useState<DateRangeResponse | null>(null);
+  useEffect(() => {
+    if (!chatId) return;
+    fetch(Paths.apiDialogDateRange(chatId), { headers: { Accept: 'application/json' } })
+      .then(async (r) => { if (r.ok) setDateRange(await r.json()); })
+      .catch(() => {});
+  }, [chatId]);
+
+  // "Show jump to bottom" state
+  const [showJumpButton, setShowJumpButton] = useState(false);
+  const bottomSentinelRef = useRef<HTMLDivElement | null>(null);
+  const topSentinelRef = useRef<HTMLDivElement | null>(null);
+
+  // Scroll to bottom on initial load
+  const hasScrolledInitially = useRef(false);
+  useEffect(() => {
+    if (!initialLoadDone || messages.length === 0) return;
+    if (hasScrolledInitially.current) return;
+    hasScrolledInitially.current = true;
+    const container = scrollRef.current;
+    if (!container) return;
+
+    if (shouldScrollBottom.current) {
+      requestAnimationFrame(() => {
+        container.scrollTop = container.scrollHeight;
+      });
+    } else if (anchorMessageId.current) {
+      requestAnimationFrame(() => {
+        const target = container.querySelector(`#msg-${anchorMessageId.current}`);
+        if (target instanceof HTMLElement) {
+          const containerRect = container.getBoundingClientRect();
+          const targetRect = target.getBoundingClientRect();
+          const offset = targetRect.top - containerRect.top - containerRect.height / 2 + targetRect.height / 2;
+          container.scrollTop += offset;
+        }
+      });
+    }
+  }, [initialLoadDone, messages.length, scrollRef, shouldScrollBottom, anchorMessageId]);
+
+  // Reset on chat change
+  useEffect(() => {
+    hasScrolledInitially.current = false;
+  }, [chatId]);
+
+  // Hash-based message highlighting
+  useEffect(() => {
+    if (!initialLoadDone || messages.length === 0) return;
+    const hash = window.location.hash;
+    if (!hash.startsWith('#msg-')) return;
+    const container = scrollRef.current;
+    if (!container) return;
+
+    const timer = setTimeout(() => {
+      const target = container.querySelector(hash);
+      if (target instanceof HTMLElement) {
+        const containerRect = container.getBoundingClientRect();
+        const targetRect = target.getBoundingClientRect();
+        const offset = targetRect.top - containerRect.top - containerRect.height / 2 + targetRect.height / 2;
+        container.scrollTop += offset;
+        target.classList.add('animate-card-highlight');
+        setTimeout(() => target.classList.remove('animate-card-highlight'), 2000);
+      }
+    }, 120);
+
+    return () => clearTimeout(timer);
+  }, [initialLoadDone, messages, scrollRef]);
+
+  // IntersectionObserver for top sentinel (load older) and bottom sentinel (show/hide FAB)
+  useEffect(() => {
+    const container = scrollRef.current;
+    if (!container) return;
+
+    const topObs = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting && hasOlder && loadState === 'idle') {
+          loadOlder();
+        }
+      },
+      { root: container, rootMargin: '200px 0px 0px 0px', threshold: 0 },
+    );
+
+    const bottomObs = new IntersectionObserver(
+      (entries) => {
+        const isVisible = entries[0]?.isIntersecting ?? false;
+        setShowJumpButton(!isVisible && initialLoadDone);
+
+        if (isVisible && hasNewer && loadState === 'idle') {
+          loadNewer();
+        }
+      },
+      { root: container, rootMargin: '0px 0px 100px 0px', threshold: 0 },
+    );
+
+    if (topSentinelRef.current) topObs.observe(topSentinelRef.current);
+    if (bottomSentinelRef.current) bottomObs.observe(bottomSentinelRef.current);
+
+    return () => {
+      topObs.disconnect();
+      bottomObs.disconnect();
+    };
+  }, [scrollRef, hasOlder, hasNewer, loadState, loadOlder, loadNewer, initialLoadDone]);
+
+  const handleDateJump = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    if (!value) return;
+    jumpToDate(value);
+  }, [jumpToDate]);
+
+  function navigateMessage(id: number) {
+    const container = scrollRef.current;
+    if (container) {
+      const target = container.querySelector(`#msg-${id}`);
+      if (target instanceof HTMLElement) {
+        const containerRect = container.getBoundingClientRect();
+        const targetRect = target.getBoundingClientRect();
+        const offset = targetRect.top - containerRect.top - containerRect.height / 2 + targetRect.height / 2;
+        container.scrollBy({ top: offset, behavior: 'smooth' });
+        target.classList.add('animate-card-highlight');
+        setTimeout(() => target.classList.remove('animate-card-highlight'), 2000);
+        return;
+      }
+    }
+    navigate(Paths.message(id, chatId));
+  }
+
+  const handleJumpToBottom = useCallback(() => {
+    if (hasNewer) {
+      jumpToNewest();
+    } else {
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+    }
+  }, [hasNewer, jumpToNewest, scrollRef]);
+
+  return (
+    <div className="relative flex-1 flex flex-col min-h-0">
+      {/* Date picker bar */}
+      {dateRange && dateRange.oldest && (
+        <div className="mb-2 flex items-center justify-end gap-2">
+          <div className="relative">
+            <Calendar className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-400" />
+            <input
+              type="date"
+              className="h-8 rounded-md border border-zinc-200 bg-white pl-8 pr-2 text-xs text-zinc-700 shadow-sm hover:border-zinc-300 focus:border-zinc-400 focus:outline-none focus:ring-1 focus:ring-zinc-300"
+              min={dateRange.oldest ? new Date(dateRange.oldest).toISOString().split('T')[0] : undefined}
+              max={dateRange.newest ? new Date(dateRange.newest).toISOString().split('T')[0] : undefined}
+              onChange={handleDateJump}
+            />
+          </div>
+          <Button variant="outline" size="sm" onClick={() => navigate(Paths.dialogTimeline(chatId, 1))} className="lg:hidden">
+            Timeline
+          </Button>
+        </div>
+      )}
+
+      {/* Scrollable message area */}
+      <div
+        ref={scrollRef}
+        className="flex-1 overflow-y-auto rounded-xl bg-zinc-100/50"
+      >
+        {chatLoading ? (
+          <div className="space-y-2 p-4">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <div key={i} className={`flex ${i % 3 === 0 ? 'justify-end' : ''}`}>
+                <Skeleton className={`h-12 rounded-2xl ${i % 2 === 0 ? 'w-2/3' : 'w-1/2'}`} />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="p-2 sm:p-3 space-y-0.5">
+            <div ref={topSentinelRef} className="h-px" />
+
+            {loadState === 'loading-older' && (
+              <div className="flex items-center justify-center py-3">
+                <Loader2 className="h-5 w-5 animate-spin text-zinc-400" />
+                <span className="ml-2 text-sm text-zinc-500">Loading older messages...</span>
+              </div>
+            )}
+
+            {!hasOlder && messages.length > 0 && (
+              <div className="py-3 text-center text-xs text-zinc-400">Beginning of conversation</div>
+            )}
+
+            {messages.map((msg, idx) => {
+              const prevMsg = messages[idx - 1];
+              const curDate = msg.metadata?.originalDate ? new Date(msg.metadata.originalDate as any) : null;
+              const prevDate = prevMsg?.metadata?.originalDate ? new Date(prevMsg.metadata.originalDate as any) : null;
+              const showDate = curDate && (!prevDate || curDate.toDateString() !== prevDate.toDateString());
+              const sameSender = !showDate && isSameSenderAsPrev(messages, idx);
+              return (
+                <div key={msg.tgMessageId}>
+                  {showDate && curDate ? <DateSeparator date={curDate} /> : null}
+                  <MessageCard message={msg} onNavigateMessage={navigateMessage} side={getMessageSide(msg)} showSender={!sameSender} />
+                </div>
+              );
+            })}
+
+            {loadState === 'loading-newer' && (
+              <div className="flex items-center justify-center py-3">
+                <Loader2 className="h-5 w-5 animate-spin text-zinc-400" />
+                <span className="ml-2 text-sm text-zinc-500">Loading newer messages...</span>
+              </div>
+            )}
+
+            <div ref={bottomSentinelRef} className="h-px" />
+          </div>
+        )}
+      </div>
+
+      {/* Jump to bottom FAB */}
+      {showJumpButton && (
+        <button
+          onClick={handleJumpToBottom}
+          className="absolute bottom-4 right-4 z-40 flex h-10 w-10 items-center justify-center rounded-full bg-zinc-800 text-white shadow-lg transition-all hover:bg-zinc-700 active:scale-95"
+          title="Jump to newest"
+        >
+          <ChevronDown className="h-5 w-5" />
+        </button>
+      )}
     </div>
   );
 }

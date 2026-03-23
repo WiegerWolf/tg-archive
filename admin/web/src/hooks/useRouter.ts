@@ -16,11 +16,21 @@ function parseCurrentRoute(): RouteState {
     };
   }
   const dialogMatch = pathname.match(/^\/dialog\/(-?\d+)$/);
-  if (dialogMatch) return { name: 'dialog', chatId: dialogMatch[1] };
+  if (dialogMatch) {
+    const params = new URLSearchParams(search);
+    const aroundStr = params.get('around');
+    const dateStr = params.get('date');
+    const around = aroundStr ? Number(aroundStr) : undefined;
+    const date = dateStr || undefined;
+    return { name: 'dialog', chatId: dialogMatch[1], ...(around != null && Number.isFinite(around) ? { around } : {}), ...(date ? { date } : {}) };
+  }
+  // Legacy /messages URL → redirect to /dialog/:id
   const messagesMatch = pathname.match(/^\/dialog\/(-?\d+)\/messages$/);
   if (messagesMatch) {
-    const pageFromQuery = Number(new URLSearchParams(search).get('page') || '1');
-    return { name: 'messages', chatId: messagesMatch[1], page: Number.isFinite(pageFromQuery) && pageFromQuery > 0 ? pageFromQuery : 1 };
+    const qs = search ? search : '';
+    const redirectPath = `/dialog/${messagesMatch[1]}${qs}${window.location.hash}`;
+    window.history.replaceState({}, '', redirectPath);
+    return parseCurrentRoute();
   }
   const timelineMatch = pathname.match(/^\/dialog\/(-?\d+)\/timeline$/);
   if (timelineMatch) {

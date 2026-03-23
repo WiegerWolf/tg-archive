@@ -13,6 +13,8 @@ export const ROUTES = {
     dialogs: '/api/dialogs',
     dialog: '/api/dialog/:id',
     dialogMessages: '/api/dialog/:id/messages',
+    dialogMessagesCursor: '/api/dialog/:id/messages/cursor',
+    dialogDateRange: '/api/dialog/:id/date-range',
     dialogTimeline: '/api/dialog/:id/timeline',
     dialogBackfill: '/api/dialog/:id/backfill',
     recentDialogsBackfill: '/api/backfill/recent',
@@ -27,11 +29,12 @@ export const ROUTES = {
 } as const;
 
 export const Paths = {
-  dialog: (chatId: string | number) => `/dialog/${chatId}`,
-  dialogMessages: (chatId: string | number, page = 1, limit?: number) => {
-    const params = new URLSearchParams({ page: String(page) });
-    if (limit) params.set('limit', String(limit));
-    return `/dialog/${chatId}/messages?${params.toString()}`;
+  dialog: (chatId: string | number, options?: { around?: number; date?: string }) => {
+    const params = new URLSearchParams();
+    if (options?.around != null) params.set('around', String(options.around));
+    if (options?.date) params.set('date', options.date);
+    const qs = params.toString();
+    return qs ? `/dialog/${chatId}?${qs}` : `/dialog/${chatId}`;
   },
   dialogTimeline: (chatId: string | number, page = 1, limit?: number) => {
     const params = new URLSearchParams({ page: String(page) });
@@ -62,6 +65,17 @@ export const Paths = {
   apiDialog: (chatId: string | number) => `/api/dialog/${chatId}`,
   apiDialogMessages: (chatId: string | number, page = 1, limit = 50) =>
     `/api/dialog/${chatId}/messages?page=${page}&limit=${limit}`,
+  apiDialogMessagesCursor: (chatId: string | number, options?: { around?: number; before?: number; after?: number; date?: string; limit?: number }) => {
+    const params = new URLSearchParams();
+    if (options?.around != null) params.set('around', String(options.around));
+    if (options?.before != null) params.set('before', String(options.before));
+    if (options?.after != null) params.set('after', String(options.after));
+    if (options?.date) params.set('date', options.date);
+    if (options?.limit) params.set('limit', String(options.limit));
+    const qs = params.toString();
+    return qs ? `/api/dialog/${chatId}/messages/cursor?${qs}` : `/api/dialog/${chatId}/messages/cursor`;
+  },
+  apiDialogDateRange: (chatId: string | number) => `/api/dialog/${chatId}/date-range`,
   apiDialogTimeline: (chatId: string | number, page = 1, limit = 50) =>
     `/api/dialog/${chatId}/timeline?page=${page}&limit=${limit}`,
   apiDialogBackfill: (chatId: string | number) => `/api/dialog/${chatId}/backfill`,
@@ -89,6 +103,19 @@ export const Paths = {
   apiSyncConfig: () => '/api/sync-config',
   apiDialogActivity: () => '/api/dialog-activity',
 } as const;
+
+export type CursorMessagesResponse = {
+  messages: MessageSearchResult[];
+  hasOlder: boolean;
+  hasNewer: boolean;
+  chatId: number | string;
+  dialogType?: { isUser?: boolean; isGroup?: boolean; isChannel?: boolean };
+};
+
+export type DateRangeResponse = {
+  oldest: string | null;
+  newest: string | null;
+};
 
 export type MessageSearchResult = {
   tgMessageId: number;
