@@ -5,21 +5,26 @@
 <h1 align="center">Telegram Archive</h1>
 
 <p align="center">
-  Archive Telegram conversations, media, and history with a self-hosted sync agent and a searchable web UI.
+  Self-host your Telegram history with a sync agent, searchable web UI, media storage, and change tracking for edits, deletions, and dialog updates.
 </p>
 
 <p align="center">
   <img src="./docs/main-view.png" alt="Telegram Archive main dashboard" width="900">
 </p>
 
-## What It Does
+## Why this exists
+
+Telegram is great for communication, but weak as a long-term personal archive. Search is limited, exports are clumsy, and historical changes are easy to lose. This project gives you your own searchable archive with structured storage, media retention, and an admin UI for browsing everything locally.
+
+## What it does
 
 - Syncs Telegram chats, media, and metadata into your own storage
-- Keeps historical changes so edits, deletions, and dialog updates are inspectable
+- Preserves history so edits, deletions, and dialog changes are inspectable
 - Provides a web admin for browsing dialogs, searching messages, and reviewing timelines
 - Stores structured data in MongoDB and media in MinIO-compatible object storage
+- Supports both historical import and ongoing live sync
 
-## Product Tour
+## Product tour
 
 ### Main dashboard
 
