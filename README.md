@@ -24,6 +24,8 @@ Telegram is great for communication, but weak as a long-term personal archive. S
 - Stores structured data in MongoDB and media in MinIO-compatible object storage
 - Supports both historical import and ongoing live sync
 
+In practice, that means you get a self-hosted Telegram archive that is much easier to search, inspect, and keep long-term than Telegram's built-in tooling.
+
 ## Product tour
 
 ### Main dashboard
