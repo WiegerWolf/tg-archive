@@ -28,6 +28,12 @@ type Reaction = {
   chosenOrder?: number;
 };
 
+export type ReplyPreview = {
+  senderName?: string;
+  text?: string;
+  mediaType?: string;
+};
+
 export type ArchiveMessage = {
   tgMessageId: number;
   chatId?: string;
@@ -372,15 +378,21 @@ function isStickerOnly(message: ArchiveMessage) {
   return !hasText;
 }
 
-export function DateSeparator({ date }: { date: Date }) {
+export function DateSeparator({ date, onDateClick }: { date: Date; onDateClick?: () => void }) {
   return (
-    <div className="flex justify-center py-2">
-      <span className="rounded-full bg-zinc-200 px-3 py-1 text-xs font-medium text-zinc-600">{formatDate(date)}</span>
+    <div className="sticky top-0 z-10 flex justify-center py-2">
+      <button
+        type="button"
+        onClick={onDateClick}
+        className="rounded-full bg-zinc-200/90 px-3 py-1 text-xs font-medium text-zinc-600 shadow-sm backdrop-blur-sm transition-colors hover:bg-zinc-300/90 cursor-pointer"
+      >
+        {formatDate(date)}
+      </button>
     </div>
   );
 }
 
-export function MessageCard({ message, onNavigateMessage, showSender, side = 'left', showHistoryLink = true }: { message: ArchiveMessage; onNavigateMessage: (id: number, chatId?: string) => void; showSender?: boolean; side?: 'left' | 'right'; showHistoryLink?: boolean }) {
+export function MessageCard({ message, onNavigateMessage, showSender, side = 'left', showHistoryLink = true, replyPreview }: { message: ArchiveMessage; onNavigateMessage: (id: number, chatId?: string) => void; showSender?: boolean; side?: 'left' | 'right'; showHistoryLink?: boolean; replyPreview?: ReplyPreview | null }) {
   const originalDate = toDate(message.metadata?.originalDate);
   const editedDate = toDate(message.edited?.date);
   const deletedDate = toDate(message.deleted?.at);
@@ -472,10 +484,25 @@ export function MessageCard({ message, onNavigateMessage, showSender, side = 'le
         {/* Reply */}
         {message.replyTo?.messageId ? (
           <button
-            className={`mt-1 flex w-full items-center gap-1.5 rounded-md border-l-2 ${isRight ? 'border-indigo-300 bg-indigo-100/60' : 'border-blue-400 bg-blue-50/60'} px-2 py-1 text-left text-xs text-zinc-500 hover:bg-blue-50 transition-colors`}
+            className={`mt-1 flex w-full flex-col rounded-md border-l-2 ${isRight ? 'border-indigo-300 bg-indigo-100/60' : 'border-blue-400 bg-blue-50/60'} px-2 py-1 text-left text-xs hover:brightness-95 transition-all`}
             onClick={() => onNavigateMessage(message.replyTo!.messageId!, messageChatId)}
           >
-            Reply to <span className="font-medium text-blue-600">#{message.replyTo.messageId}</span>
+            {replyPreview ? (
+              <>
+                <span className={`font-medium leading-tight ${senderColor(replyPreview.senderName)}`}>{replyPreview.senderName || 'Unknown'}</span>
+                <span className="text-zinc-500 line-clamp-1 leading-snug">
+                  {replyPreview.mediaType && !replyPreview.text ? (
+                    <span className="italic">{replyPreview.mediaType}</span>
+                  ) : replyPreview.text ? (
+                    <>{replyPreview.mediaType ? <span className="italic">{replyPreview.mediaType} </span> : null}{replyPreview.text}</>
+                  ) : (
+                    <span className="italic">Message</span>
+                  )}
+                </span>
+              </>
+            ) : (
+              <span className="text-zinc-500">Reply to <span className="font-medium text-blue-600">#{message.replyTo.messageId}</span></span>
+            )}
           </button>
         ) : null}
 
@@ -491,11 +518,26 @@ export function MessageCard({ message, onNavigateMessage, showSender, side = 'le
 
         {/* Location */}
         {content.location ? (
-          <div className="mt-1.5 inline-flex items-center gap-2 rounded-lg bg-zinc-50 px-2.5 py-1.5 text-sm">
-            <span className="text-zinc-400">📍</span>
-            <span className="text-xs text-zinc-600">{(content.location.latitude ?? 0).toFixed(5)}, {(content.location.longitude ?? 0).toFixed(5)}</span>
-            <a className="text-xs text-blue-500 hover:underline" href={`https://www.openstreetmap.org/?mlat=${content.location.latitude}&mlon=${content.location.longitude}&zoom=16`} target="_blank" rel="noreferrer">Map</a>
-          </div>
+          <a
+            className="mt-1.5 -mx-1 block overflow-hidden rounded-lg"
+            href={`https://www.openstreetmap.org/?mlat=${content.location.latitude}&mlon=${content.location.longitude}#map=16/${content.location.latitude}/${content.location.longitude}`}
+            target="_blank"
+            rel="noreferrer"
+          >
+            <div className="relative">
+              <iframe
+                className="pointer-events-none h-40 w-full border-0 sm:h-48"
+                src={`https://www.openstreetmap.org/export/embed.html?bbox=${(content.location.longitude ?? 0) - 0.008}%2C${(content.location.latitude ?? 0) - 0.005}%2C${(content.location.longitude ?? 0) + 0.008}%2C${(content.location.latitude ?? 0) + 0.005}&layer=mapnik&marker=${content.location.latitude}%2C${content.location.longitude}`}
+                loading="lazy"
+                title="Location"
+              />
+            </div>
+            {content.location.title ? (
+              <div className="bg-zinc-50 px-2.5 py-1.5 text-xs font-medium text-zinc-700">{content.location.title}</div>
+            ) : (
+              <div className="bg-zinc-50 px-2.5 py-1 text-[11px] text-zinc-500">{(content.location.latitude ?? 0).toFixed(5)}, {(content.location.longitude ?? 0).toFixed(5)}</div>
+            )}
+          </a>
         ) : null}
 
         {/* Text content */}

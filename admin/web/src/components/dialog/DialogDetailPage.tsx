@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { BadgeCheck, Bot, Calendar, ChevronDown, ChevronLeft, ChevronRight, ExternalLink, Loader2, Radio, RefreshCcw, User, Users } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { BadgeCheck, Bot, ChevronDown, ChevronLeft, ChevronRight, ExternalLink, Loader2, Radio, RefreshCcw, User, Users } from 'lucide-react';
 import { Paths, type DialogActivityItem, type DateRangeResponse } from '@shared/api';
 import type { Dialog } from '../../types';
 import type { ArchiveMessage } from '../MessageCard';
-import { DateSeparator, MessageCard } from '../MessageCard';
+import { DateSeparator, MessageCard, type ReplyPreview } from '../MessageCard';
 import { DialogDetailsPanel } from '../DialogDetailsPanel';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
@@ -355,6 +355,66 @@ export function DialogDetailPage({ dialog, loading, refreshing, onRefresh, messa
   );
 }
 
+const mediaTypeLabels: Record<string, string> = {
+  photo: 'Photo',
+  video: 'Video',
+  voice: 'Voice message',
+  audio: 'Audio',
+  document: 'Document',
+  sticker: 'Sticker',
+  animation: 'GIF',
+  video_note: 'Video message',
+  contact: 'Contact',
+};
+
+function extractReplyPreview(msg: ArchiveMessage): ReplyPreview {
+  const text = typeof msg.content?.text === 'string'
+    ? msg.content.text
+    : Array.isArray(msg.content?.text)
+      ? msg.content.text.map((p) => typeof p === 'string' ? p : p.text || '').join('')
+      : undefined;
+  const mediaType = msg.content?.media?.type
+    ? mediaTypeLabels[msg.content.media.type] || msg.content.media.type
+    : msg.content?.location
+      ? 'Location'
+      : undefined;
+  return {
+    senderName: msg.sender?.name,
+    text: text ? (text.length > 120 ? text.slice(0, 120) + '...' : text) : undefined,
+    mediaType,
+  };
+}
+
+function buildReplyMap(messages: ArchiveMessage[]): Map<number, ReplyPreview> {
+  const byId = new Map<number, ArchiveMessage>();
+  for (const msg of messages) {
+    byId.set(msg.tgMessageId, msg);
+  }
+  const replyMap = new Map<number, ReplyPreview>();
+  for (const msg of messages) {
+    const replyId = msg.replyTo?.messageId;
+    if (replyId != null && byId.has(replyId)) {
+      replyMap.set(replyId, extractReplyPreview(byId.get(replyId)!));
+    }
+  }
+  return replyMap;
+}
+
+function groupMessagesByDate(messages: ArchiveMessage[]) {
+  const groups: Array<{ dateKey: string; date: Date; messages: ArchiveMessage[] }> = [];
+  for (const msg of messages) {
+    const d = msg.metadata?.originalDate ? new Date(msg.metadata.originalDate as any) : null;
+    const key = d ? d.toDateString() : 'unknown';
+    const last = groups[groups.length - 1];
+    if (last && last.dateKey === key) {
+      last.messages.push(msg);
+    } else {
+      groups.push({ dateKey: key, date: d || new Date(), messages: [msg] });
+    }
+  }
+  return groups;
+}
+
 /* ── Chat scroll area (extracted for clarity) ── */
 
 function ChatScrollArea({ chatId, chat }: { chatId: string; chat: ChatScrollReturn }) {
@@ -510,26 +570,34 @@ function ChatScrollArea({ chatId, chat }: { chatId: string; chat: ChatScrollRetu
     }
   }, [hasNewer, jumpToNewest, scrollRef]);
 
+  // Build reply preview map from loaded messages
+  const replyMap = useMemo(() => buildReplyMap(messages), [messages]);
+
+  // Hidden date input triggered by clicking date pills
+  const dateInputRef = useRef<HTMLInputElement | null>(null);
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
+
+  const openDatePicker = useCallback(() => {
+    const input = dateInputRef.current;
+    if (input) {
+      input.showPicker?.();
+      setDatePickerOpen(true);
+    }
+  }, []);
+
   return (
     <div className="relative flex-1 flex flex-col min-h-0">
-      {/* Date picker bar */}
-      {dateRange && dateRange.oldest && (
-        <div className="mb-2 flex items-center justify-end gap-2">
-          <div className="relative">
-            <Calendar className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-400" />
-            <input
-              type="date"
-              className="h-8 rounded-md border border-zinc-200 bg-white pl-8 pr-2 text-xs text-zinc-700 shadow-sm hover:border-zinc-300 focus:border-zinc-400 focus:outline-none focus:ring-1 focus:ring-zinc-300"
-              min={dateRange.oldest ? new Date(dateRange.oldest).toISOString().split('T')[0] : undefined}
-              max={dateRange.newest ? new Date(dateRange.newest).toISOString().split('T')[0] : undefined}
-              onChange={handleDateJump}
-            />
-          </div>
-          <Button variant="outline" size="sm" onClick={() => navigate(Paths.dialogTimeline(chatId, 1))} className="lg:hidden">
-            Timeline
-          </Button>
-        </div>
-      )}
+      {/* Hidden date input for calendar jump */}
+      <input
+        ref={dateInputRef}
+        type="date"
+        className="sr-only"
+        min={dateRange?.oldest ? new Date(dateRange.oldest).toISOString().split('T')[0] : undefined}
+        max={dateRange?.newest ? new Date(dateRange.newest).toISOString().split('T')[0] : undefined}
+        onChange={(e) => { handleDateJump(e); setDatePickerOpen(false); }}
+        onBlur={() => setDatePickerOpen(false)}
+        tabIndex={-1}
+      />
 
       {/* Scrollable message area */}
       <div
@@ -559,19 +627,19 @@ function ChatScrollArea({ chatId, chat }: { chatId: string; chat: ChatScrollRetu
               <div className="py-3 text-center text-xs text-zinc-400">Beginning of conversation</div>
             )}
 
-            {messages.map((msg, idx) => {
-              const prevMsg = messages[idx - 1];
-              const curDate = msg.metadata?.originalDate ? new Date(msg.metadata.originalDate as any) : null;
-              const prevDate = prevMsg?.metadata?.originalDate ? new Date(prevMsg.metadata.originalDate as any) : null;
-              const showDate = curDate && (!prevDate || curDate.toDateString() !== prevDate.toDateString());
-              const sameSender = !showDate && isSameSenderAsPrev(messages, idx);
-              return (
-                <div key={msg.tgMessageId}>
-                  {showDate && curDate ? <DateSeparator date={curDate} /> : null}
-                  <MessageCard message={msg} onNavigateMessage={navigateMessage} side={getMessageSide(msg)} showSender={!sameSender} />
-                </div>
-              );
-            })}
+            {groupMessagesByDate(messages).map((group) => (
+              <div key={group.dateKey}>
+                <DateSeparator date={group.date} onDateClick={openDatePicker} />
+                {group.messages.map((msg, idx) => {
+                  const sameSender = isSameSenderAsPrev(group.messages, idx);
+                  return (
+                    <div key={msg.tgMessageId}>
+                      <MessageCard message={msg} onNavigateMessage={navigateMessage} side={getMessageSide(msg)} showSender={!sameSender} replyPreview={msg.replyTo?.messageId != null ? replyMap.get(msg.replyTo.messageId) ?? null : undefined} />
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
 
             {loadState === 'loading-newer' && (
               <div className="flex items-center justify-center py-3">
