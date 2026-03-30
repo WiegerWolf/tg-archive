@@ -2894,7 +2894,7 @@ async function appendMessageHistoryEntry({
     return;
   }
 
-  await historyCollection.insertOne(prepareFoMongoDB({
+  const historyEntry = prepareFoMongoDB({
     tgChatId: referenceDoc.tgChatId,
     tgMessageId: referenceDoc.tgMessageId,
     version,
@@ -2906,7 +2906,25 @@ async function appendMessageHistoryEntry({
     changes,
     before: normalizeMessageSnapshotForHistory(existingDoc),
     after: normalizeMessageSnapshotForHistory(nextDoc),
-  }));
+  });
+
+  const result = await historyCollection.updateOne(
+    {
+      tgChatId: historyEntry.tgChatId,
+      tgMessageId: historyEntry.tgMessageId,
+      version: historyEntry.version,
+    },
+    {
+      $setOnInsert: historyEntry,
+    },
+    { upsert: true },
+  );
+
+  if ((result.upsertedCount || 0) === 0) {
+    console.warn(
+      `Message history entry already exists for chat ${String(historyEntry.tgChatId)} message ${historyEntry.tgMessageId} version ${historyEntry.version}; skipping duplicate append.`,
+    );
+  }
 }
 
 function getCurrentMessageVersion(message: any): number {
