@@ -40,6 +40,7 @@ const EFFECTIVE_BACKFILL_STALE_LOCK_MS = Number.isFinite(parsedBackfillStaleLock
   ? parsedBackfillStaleLockMs
   : DEFAULT_BACKFILL_STALE_LOCK_MS;
 const DEFAULT_DIALOG_AVATAR_DOWNLOAD_TIMEOUT_MS = 15_000;
+const TELEGRAM_HEALTH_CHECK_INTERVAL_MS = 60_000;
 const parsedDialogAvatarDownloadTimeoutMs = Number(
   DIALOG_AVATAR_DOWNLOAD_TIMEOUT_MS || DEFAULT_DIALOG_AVATAR_DOWNLOAD_TIMEOUT_MS,
 );
@@ -69,11 +70,56 @@ function checkTelegramConfig({
 }
 
 let tgClient: TelegramClient;
+let tgClientPromise: Promise<TelegramClient> | undefined;
 let messageHistoryIndexesReady: Promise<void> | null = null;
+const liveEventHandlersBoundClients = new WeakSet<TelegramClient>();
+
+function attachLiveEventHandlers(client: TelegramClient) {
+  if (liveEventHandlersBoundClients.has(client)) {
+    return;
+  }
+
+  client.addEventHandler(handleNewMessageEvent, new NewMessage({}));
+  client.addEventHandler(handleReactionUpdateEvent, new Raw({ types: [Api.UpdateMessageReactions] }));
+  client.addEventHandler(handleEditedMessageEvent, new Raw({ types: [Api.UpdateEditMessage, Api.UpdateEditChannelMessage] }));
+  client.addEventHandler(handleDeletedMessageEvent, new Raw({ types: [Api.UpdateDeleteMessages, Api.UpdateDeleteChannelMessages] }));
+  liveEventHandlersBoundClients.add(client);
+}
+
+async function disconnectTelegramClient(client: TelegramClient | undefined, reason: string) {
+  if (!client) {
+    return;
+  }
+
+  try {
+    console.warn(`Disconnecting Telegram client: ${reason}`);
+    await client.disconnect();
+  } catch (error) {
+    console.error(`Error disconnecting Telegram client (${reason}):`, error);
+  }
+}
+
+async function resetTelegramClient(reason: string, client: TelegramClient | undefined = tgClient) {
+  if (client && tgClient === client) {
+    tgClient = undefined;
+  }
+
+  await disconnectTelegramClient(client, reason);
+}
+
 async function getTelegramClient() {
   if (tgClient && tgClient.connected) {
     return tgClient;
   }
+
+  if (tgClientPromise) {
+    return tgClientPromise;
+  }
+
+  tgClientPromise = (async () => {
+    if (tgClient && !tgClient.connected) {
+      await resetTelegramClient('stale disconnected client before reconnect', tgClient);
+    }
 
   const apiId = Number(TELEGRAM_API_ID);
   const apiHash = TELEGRAM_API_HASH || "";
@@ -87,8 +133,9 @@ async function getTelegramClient() {
 
   checkTelegramConfig({ apiId, apiHash, password });
 
+  let client: TelegramClient | undefined;
   try {
-    const client = new TelegramClient(
+    client = new TelegramClient(
       stringSession,
       apiId,
       apiHash,
@@ -204,18 +251,17 @@ async function getTelegramClient() {
 
   } catch (error) {
     console.error("Error connecting to Telegram:", error);
-    
-    if (tgClient) {
-      try {
-        await tgClient.disconnect();
-      } catch (e) {
-        console.error("Error disconnecting existing client:", e);
-      }
-      tgClient = undefined;
-    }
+
+    await disconnectTelegramClient(client, 'connection failure during setup');
+    await resetTelegramClient('connection failure');
 
     throw error;
+  } finally {
+    tgClientPromise = undefined;
   }
+  })();
+
+  return tgClientPromise;
 }
 
 let dbClient: Db;
@@ -225,6 +271,8 @@ let liveSyncChatIdsCacheUpdatedAt = 0;
 const DIALOG_CONTEXT_CACHE_TTL_MS = 60_000;
 let backfillRunInProgress = false;
 let dialogBackfillPollTimer: ReturnType<typeof setInterval> | undefined;
+let telegramHealthCheckTimer: ReturnType<typeof setInterval> | undefined;
+let telegramHealthCheckInFlight = false;
 
 type DialogContextSnapshot = {
   chatName?: string;
@@ -472,65 +520,92 @@ async function runBackupBootstrapIfNeeded() {
     },
   });
 
-  const summary = await importBackupsFromRoot(BOOTSTRAP_EXPORTS_DIR, {
-    onChatStart: async ({ chatId, chatName, chatIndex, totalChats }) => {
-      await setAgentStatus("bootstrap_import", {
-        message: `Reconciling ${chatName} (${chatIndex}/${totalChats})`,
-        progress: { processed: chatIndex - 1, total: totalChats },
+  let summary;
+  try {
+    summary = await importBackupsFromRoot(BOOTSTRAP_EXPORTS_DIR, {
+      onChatStart: async ({ chatId, chatName, chatIndex, totalChats }) => {
+        await setAgentStatus("bootstrap_import", {
+          message: `Reconciling ${chatName} (${chatIndex}/${totalChats})`,
+          progress: { processed: chatIndex - 1, total: totalChats },
+          reconcile: {
+            phase: 'importing',
+            currentChatId: String(chatId),
+            currentChatName: chatName,
+            chatIndex,
+            totalChats,
+            chatProgress: {
+              processedMessages: 0,
+              totalMessages: 0,
+              importedMessages: 0,
+              skippedExistingMessages: 0,
+            },
+          },
+        });
+      },
+      onChatProgress: async ({ chatId, chatName, chatIndex, totalChats, progress }) => {
+        await setAgentStatus("bootstrap_import", {
+          message: `Reconciling ${chatName} (${chatIndex}/${totalChats})`,
+          progress: { processed: chatIndex - 1, total: totalChats },
+          reconcile: {
+            phase: 'importing',
+            currentChatId: String(chatId),
+            currentChatName: chatName,
+            chatIndex,
+            totalChats,
+            chatProgress: {
+              processedMessages: progress.processedMessages,
+              totalMessages: progress.totalMessages,
+              importedMessages: progress.importedMessages,
+              skippedExistingMessages: progress.skippedExistingMessages,
+            },
+          },
+        });
+      },
+      onChatDone: async ({ chatId, chatName, chatIndex, totalChats, result }) => {
+        await setAgentStatus("bootstrap_import", {
+          message: `Reconciled ${chatName}: +${result.importedMessages} imported, ${result.skippedExistingMessages} already archived`,
+          progress: { processed: chatIndex, total: totalChats },
+          reconcile: {
+            phase: 'importing',
+            currentChatId: String(chatId),
+            currentChatName: chatName,
+            chatIndex,
+            totalChats,
+            chatProgress: {
+              processedMessages: result.scannedMessages,
+              totalMessages: result.scannedMessages,
+              importedMessages: result.importedMessages,
+              skippedExistingMessages: result.skippedExistingMessages,
+            },
+          },
+        });
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message === `No result.json files found under ${BOOTSTRAP_EXPORTS_DIR}`) {
+      console.log(`No Telegram export backups found under ${BOOTSTRAP_EXPORTS_DIR}; skipping bootstrap import.`);
+      await setAgentStatus("bootstrap_import_done", {
+        message: `No Telegram exports found under ${BOOTSTRAP_EXPORTS_DIR}; live sync starting`,
+        qrDataUrl: null,
+        progress: { processed: 0, total: 0 },
         reconcile: {
-          phase: 'importing',
-          currentChatId: String(chatId),
-          currentChatName: chatName,
-          chatIndex,
-          totalChats,
-          chatProgress: {
-            processedMessages: 0,
-            totalMessages: 0,
+          phase: 'done',
+          totals: {
+            scannedChats: 0,
+            importedChats: 0,
+            skippedNonWhitelistedChats: 0,
+            scannedMessages: 0,
             importedMessages: 0,
             skippedExistingMessages: 0,
           },
         },
       });
-    },
-    onChatProgress: async ({ chatId, chatName, chatIndex, totalChats, progress }) => {
-      await setAgentStatus("bootstrap_import", {
-        message: `Reconciling ${chatName} (${chatIndex}/${totalChats})`,
-        progress: { processed: chatIndex - 1, total: totalChats },
-        reconcile: {
-          phase: 'importing',
-          currentChatId: String(chatId),
-          currentChatName: chatName,
-          chatIndex,
-          totalChats,
-          chatProgress: {
-            processedMessages: progress.processedMessages,
-            totalMessages: progress.totalMessages,
-            importedMessages: progress.importedMessages,
-            skippedExistingMessages: progress.skippedExistingMessages,
-          },
-        },
-      });
-    },
-    onChatDone: async ({ chatId, chatName, chatIndex, totalChats, result }) => {
-      await setAgentStatus("bootstrap_import", {
-        message: `Reconciled ${chatName}: +${result.importedMessages} imported, ${result.skippedExistingMessages} already archived`,
-        progress: { processed: chatIndex, total: totalChats },
-        reconcile: {
-          phase: 'importing',
-          currentChatId: String(chatId),
-          currentChatName: chatName,
-          chatIndex,
-          totalChats,
-          chatProgress: {
-            processedMessages: result.scannedMessages,
-            totalMessages: result.scannedMessages,
-            importedMessages: result.importedMessages,
-            skippedExistingMessages: result.skippedExistingMessages,
-          },
-        },
-      });
-    },
-  });
+      return;
+    }
+
+    throw error;
+  }
 
   await setAgentStatus("bootstrap_import_done", {
     message: `Reconciled backups: chats ${summary.importedChats}/${summary.scannedChats}, imported ${summary.importedMessages}, skipped existing ${summary.skippedExistingMessages}`,
@@ -1173,6 +1248,56 @@ async function runStartupSyncInBackground(client: TelegramClient) {
   }
 }
 
+async function ensureTelegramClientHealthy(trigger: string) {
+  if (isShuttingDown || telegramHealthCheckInFlight) {
+    return;
+  }
+
+  telegramHealthCheckInFlight = true;
+  try {
+    const client = await getTelegramClient();
+    attachLiveEventHandlers(client);
+    await client.invoke(new Api.updates.GetState());
+  } catch (error) {
+    console.error(`Telegram health check failed (${trigger}):`, error);
+
+    await setAgentStatus('error', {
+      message: error instanceof Error
+        ? `Telegram reconnecting after health check failure: ${error.message}`
+        : 'Telegram reconnecting after health check failure',
+      qrDataUrl: null,
+    });
+
+    await resetTelegramClient(`health check failure (${trigger})`);
+
+    try {
+      const recoveredClient = await getTelegramClient();
+      attachLiveEventHandlers(recoveredClient);
+      await setAgentStatus('listening', {
+        message: 'Listening for new messages',
+        qrDataUrl: null,
+      });
+      console.log(`Telegram client recovered after ${trigger}.`);
+    } catch (recoveryError) {
+      console.error(`Telegram client recovery failed (${trigger}):`, recoveryError);
+    }
+  } finally {
+    telegramHealthCheckInFlight = false;
+  }
+}
+
+function startTelegramHealthChecks() {
+  if (telegramHealthCheckTimer) {
+    return;
+  }
+
+  telegramHealthCheckTimer = setInterval(() => {
+    ensureTelegramClientHealthy('interval').catch((error) => {
+      console.error('Unexpected Telegram health check failure:', error);
+    });
+  }, TELEGRAM_HEALTH_CHECK_INTERVAL_MS);
+}
+
 async function main() {
   try {
     await setAgentStatus("starting", {
@@ -1188,16 +1313,14 @@ async function main() {
 
     // Phase 2: Start listening for new messages immediately
     console.log('Phase 2: Starting live message listener...');
-    client.addEventHandler(handleNewMessageEvent, new NewMessage({}));
-    client.addEventHandler(handleReactionUpdateEvent, new Raw({ types: [Api.UpdateMessageReactions] }));
-    client.addEventHandler(handleEditedMessageEvent, new Raw({ types: [Api.UpdateEditMessage, Api.UpdateEditChannelMessage] }));
-    client.addEventHandler(handleDeletedMessageEvent, new Raw({ types: [Api.UpdateDeleteMessages, Api.UpdateDeleteChannelMessages] }));
+    attachLiveEventHandlers(client);
     console.log('Now listening for new messages...');
     await setAgentStatus("listening", {
       message: "Listening for new messages",
       qrDataUrl: null,
     });
     startDialogBackfillRequestPolling();
+    startTelegramHealthChecks();
 
     console.log('Phase 3: Scheduling startup dialog sync and historical backfill...');
     void runStartupSyncInBackground(client);
@@ -1249,14 +1372,15 @@ async function gracefulShutdown(signal: string) {
     dialogBackfillPollTimer = undefined;
   }
 
+  if (telegramHealthCheckTimer) {
+    clearInterval(telegramHealthCheckTimer);
+    telegramHealthCheckTimer = undefined;
+  }
+
   await releaseDialogSyncLocks();
 
   if (tgClient) {
-    try {
-      await tgClient.disconnect();
-    } catch (error) {
-      console.error('Error disconnecting Telegram client during shutdown:', error);
-    }
+    await resetTelegramClient(`shutdown (${signal})`, tgClient);
   }
 
   if (mongoClientConnection) {
