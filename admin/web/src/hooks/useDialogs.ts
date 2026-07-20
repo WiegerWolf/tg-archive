@@ -193,18 +193,24 @@ export function useDialogs() {
     }
   }
 
-  async function requestRecentBackfillForLiveSyncChats() {
+  async function requestRecentBackfillForLiveSyncChats(windowDays = 7) {
     if (recentBackfillRequesting) return;
+    const windowLabel = `${windowDays}-day`;
     setRecentBackfillRequesting(true);
     setGlobalBackfillFeedback(null);
     try {
-      const response = await fetch(Paths.apiRecentDialogsBackfill(), { method: 'POST', headers: { Accept: 'application/json' } });
+      const response = await fetch(Paths.apiRecentDialogsBackfill(), {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ windowDays }),
+      });
       if (!response.ok) {
         const payload = (await response.json().catch(() => ({}))) as { message?: string };
-        throw new Error(payload.message || 'Failed to request 7-day backfill');
+        throw new Error(payload.message || `Failed to request ${windowLabel} backfill`);
       }
 
       const payload = (await response.json()) as RecentDialogsBackfillResponse;
+      const effectiveLabel = `${payload.windowDays ?? windowDays}-day`;
       const details: string[] = [];
       if (payload.skippedAlreadyQueuedCount > 0) {
         details.push(`${payload.skippedAlreadyQueuedCount} already queued`);
@@ -216,12 +222,12 @@ export function useDialogs() {
       if (payload.queuedCount > 0) {
         setGlobalBackfillFeedback({
           tone: 'success',
-          message: `Queued a 7-day backfill for ${payload.queuedCount} live-sync chats${details.length ? ` (${details.join(' · ')})` : ''}.`,
+          message: `Queued a ${effectiveLabel} backfill for ${payload.queuedCount} live-sync chats${details.length ? ` (${details.join(' · ')})` : ''}.`,
         });
       } else {
         setGlobalBackfillFeedback({
           tone: 'info',
-          message: `No new 7-day backfill requests were queued${details.length ? ` (${details.join(' · ')})` : ''}.`,
+          message: `No new ${effectiveLabel} backfill requests were queued${details.length ? ` (${details.join(' · ')})` : ''}.`,
         });
       }
 
@@ -229,7 +235,7 @@ export function useDialogs() {
     } catch (error) {
       setGlobalBackfillFeedback({
         tone: 'danger',
-        message: error instanceof Error ? error.message : 'Failed to request 7-day backfill',
+        message: error instanceof Error ? error.message : `Failed to request ${windowLabel} backfill`,
       });
     } finally {
       setRecentBackfillRequesting(false);

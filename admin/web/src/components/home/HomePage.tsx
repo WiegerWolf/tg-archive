@@ -27,7 +27,7 @@ export function HomePage({ dialogs, filteredDialogs, loading, query, onQueryChan
   globalBackfillFeedback: { message: string; tone: 'success' | 'info' | 'danger' } | null;
   liveSyncFeedback: { message: string; tone: 'success' | 'info' | 'danger' } | null;
   syncConfigSaving: boolean;
-  onRequestRecentBackfill: () => void | Promise<void>;
+  onRequestRecentBackfill: (windowDays?: number) => void | Promise<void>;
   onBulkLiveSyncChange: (chatIds: string[], enabled: boolean) => Promise<boolean>;
 }) {
   const [selectionMode, setSelectionMode] = useState(false);
@@ -128,12 +128,23 @@ export function HomePage({ dialogs, filteredDialogs, loading, query, onQueryChan
             <Button
               variant="outline"
               size="sm"
-              onClick={onRequestRecentBackfill}
+              onClick={() => onRequestRecentBackfill(7)}
               disabled={recentBackfillRequesting || syncConfigSaving || liveSyncChatIds.length === 0}
               className="shrink-0"
               title={liveSyncChatIds.length === 0 ? 'Select live-sync chats first' : 'Queue a 7-day gap fill for every live-sync chat'}
             >
               {recentBackfillRequesting ? 'Queueing 7d Backfill...' : 'Backfill Last 7 Days'}
+            </Button>
+
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onRequestRecentBackfill(30)}
+              disabled={recentBackfillRequesting || syncConfigSaving || liveSyncChatIds.length === 0}
+              className="shrink-0"
+              title={liveSyncChatIds.length === 0 ? 'Select live-sync chats first' : 'Queue a 30-day gap fill for every live-sync chat'}
+            >
+              {recentBackfillRequesting ? 'Queueing 30d Backfill...' : 'Backfill Last 30 Days'}
             </Button>
           </div>
         </div>

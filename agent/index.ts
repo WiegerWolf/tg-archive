@@ -41,6 +41,11 @@ const EFFECTIVE_BACKFILL_STALE_LOCK_MS = Number.isFinite(parsedBackfillStaleLock
   : DEFAULT_BACKFILL_STALE_LOCK_MS;
 const DEFAULT_DIALOG_AVATAR_DOWNLOAD_TIMEOUT_MS = 15_000;
 const TELEGRAM_HEALTH_CHECK_INTERVAL_MS = 60_000;
+// Hard ceiling for any single health-check operation. On a half-open TCP
+// connection, gramjs requests can hang forever instead of rejecting, which
+// previously wedged the whole health check (see ensureTelegramClientHealthy).
+// Must stay below TELEGRAM_HEALTH_CHECK_INTERVAL_MS so ticks don't overlap.
+const TELEGRAM_HEALTH_CHECK_TIMEOUT_MS = 30_000;
 const parsedDialogAvatarDownloadTimeoutMs = Number(
   DIALOG_AVATAR_DOWNLOAD_TIMEOUT_MS || DEFAULT_DIALOG_AVATAR_DOWNLOAD_TIMEOUT_MS,
 );
@@ -1255,9 +1260,17 @@ async function ensureTelegramClientHealthy(trigger: string) {
 
   telegramHealthCheckInFlight = true;
   try {
-    const client = await getTelegramClient();
+    const client = await withTimeout(
+      getTelegramClient(),
+      TELEGRAM_HEALTH_CHECK_TIMEOUT_MS,
+      `acquiring Telegram client for health check (${trigger})`,
+    );
     attachLiveEventHandlers(client);
-    await client.invoke(new Api.updates.GetState());
+    await withTimeout(
+      client.invoke(new Api.updates.GetState()),
+      TELEGRAM_HEALTH_CHECK_TIMEOUT_MS,
+      `probing Telegram updates.GetState (${trigger})`,
+    );
   } catch (error) {
     console.error(`Telegram health check failed (${trigger}):`, error);
 
@@ -1271,7 +1284,11 @@ async function ensureTelegramClientHealthy(trigger: string) {
     await resetTelegramClient(`health check failure (${trigger})`);
 
     try {
-      const recoveredClient = await getTelegramClient();
+      const recoveredClient = await withTimeout(
+        getTelegramClient(),
+        TELEGRAM_HEALTH_CHECK_TIMEOUT_MS,
+        `reconnecting Telegram client after ${trigger}`,
+      );
       attachLiveEventHandlers(recoveredClient);
       await setAgentStatus('listening', {
         message: 'Listening for new messages',

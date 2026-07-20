@@ -1394,10 +1394,14 @@ app.post(ROUTES.api.dialogBackfill, async (req, res) => {
     }
 });
 
-app.post(ROUTES.api.recentDialogsBackfill, async (_req, res) => {
+app.post(ROUTES.api.recentDialogsBackfill, async (req, res) => {
     try {
+        const requestedWindowDays = Number((req.body as { windowDays?: unknown } | undefined)?.windowDays);
+        const windowDays = Number.isFinite(requestedWindowDays) && requestedWindowDays > 0
+            ? Math.min(365, Math.max(1, Math.round(requestedWindowDays)))
+            : 7;
         const db = await getMongoDbClient();
-        const payload = await queueRecentBackfillForLiveSyncChats(db, 7);
+        const payload = await queueRecentBackfillForLiveSyncChats(db, windowDays);
         if (payload.liveSyncSelectedCount === 0) {
             return res.status(400).json({ ok: false, message: 'Select at least one live-sync chat first' });
         }
