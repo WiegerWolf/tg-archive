@@ -77,6 +77,7 @@ function checkTelegramConfig({
 let tgClient: TelegramClient;
 let tgClientPromise: Promise<TelegramClient> | undefined;
 let messageHistoryIndexesReady: Promise<void> | null = null;
+let dialogIndexesReady: Promise<void> | null = null;
 const liveEventHandlersBoundClients = new WeakSet<TelegramClient>();
 
 function attachLiveEventHandlers(client: TelegramClient) {
@@ -1322,6 +1323,10 @@ async function main() {
       qrDataUrl: null,
     });
 
+    // Collapse any legacy duplicate dialogs and enforce the tgDialogId unique
+    // index before anything starts writing dialog documents.
+    await ensureDialogIndexes();
+
     // Phase 1: Optional backup bootstrap import
     console.log('Phase 1: Checking backup bootstrap import...');
     await runBackupBootstrapIfNeeded();
@@ -1701,8 +1706,18 @@ async function saveDialog(dialog: Dialog) {
       }
     });
 
-    await dialogsCollection.insertOne(initialDialog);
-    console.log(`Created new dialog with id: ${tgDialogId}`);
+    // Upsert (not insert) so a concurrent live-sync/backfill pass that already
+    // created this dialog cannot produce a duplicate document.
+    try {
+      await dialogsCollection.replaceOne({ tgDialogId }, initialDialog, { upsert: true });
+      console.log(`Created new dialog with id: ${tgDialogId}`);
+    } catch (error: any) {
+      if (error?.code === 11000) {
+        console.warn(`Dialog ${tgDialogId} was created concurrently; skipping duplicate insert.`);
+      } else {
+        throw error;
+      }
+    }
   }
 }
 
@@ -1766,6 +1781,44 @@ async function getMessageHistoryCollection() {
 
   await messageHistoryIndexesReady;
   return collection;
+}
+
+// Collapse any pre-existing duplicate dialog documents that share a tgDialogId
+// and enforce uniqueness so live sync + backfill racing on a brand-new chat can
+// never insert the same dialog twice again (which surfaced as duplicate cards in
+// the admin UI, since the dialog list is keyed by tgDialogId).
+async function ensureDialogIndexes(): Promise<void> {
+  if (!dialogIndexesReady) {
+    dialogIndexesReady = (async () => {
+      const db = await getMongoDbClient();
+      const collection = db.collection('dialogs');
+
+      const duplicateGroups = await collection.aggregate<{ _id: string; ids: any[] }>([
+        { $group: { _id: { $toString: '$tgDialogId' }, ids: { $push: '$_id' }, n: { $sum: 1 } } },
+        { $match: { n: { $gt: 1 } } },
+      ]).toArray();
+
+      for (const group of duplicateGroups) {
+        const docs = await collection.find({ _id: { $in: group.ids } }).toArray();
+        // Keep the most complete / most recently updated document.
+        docs.sort((a: any, b: any) =>
+          ((b.metadata?.version || 0) - (a.metadata?.version || 0))
+          || ((b.name ? 1 : 0) - (a.name ? 1 : 0)));
+        const staleIds = docs.slice(1).map((doc: any) => doc._id);
+        if (staleIds.length > 0) {
+          await collection.deleteMany({ _id: { $in: staleIds } });
+          console.warn(`Removed ${staleIds.length} duplicate dialog document(s) for tgDialogId ${group._id}.`);
+        }
+      }
+
+      await collection.createIndex({ tgDialogId: 1 }, { unique: true });
+    })().catch((error) => {
+      dialogIndexesReady = null; // allow a retry on the next startup
+      console.error('Failed to ensure dialog indexes:', error);
+    });
+  }
+
+  await dialogIndexesReady;
 }
 
 async function seedMissingMessageHistoryBaselines(batchSize = 250) {

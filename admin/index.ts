@@ -378,13 +378,23 @@ async function closeMongoDbClient() {
 }
 
 async function loadDialogs(db: any) {
-    return db.collection('dialogs')
+    const dialogs = await db.collection('dialogs')
         .find({})
         .sort({
             pinned: -1,
             'metadata.lastUpdated': 1,
         })
         .toArray();
+
+    // Defensive de-duplication by tgDialogId: a stray duplicate document must
+    // never render the same chat twice or collide React list keys in the UI.
+    const seen = new Set<string>();
+    return dialogs.filter((dialog: any) => {
+        const id = String(dialog.tgDialogId);
+        if (seen.has(id)) return false;
+        seen.add(id);
+        return true;
+    });
 }
 
 async function loadDialogSyncSummary(db: any, dialogIds: string[]) {
